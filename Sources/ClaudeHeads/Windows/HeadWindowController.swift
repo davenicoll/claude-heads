@@ -9,6 +9,10 @@ import SwiftUI
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.mouseDown(with: event)
     }
@@ -44,10 +48,14 @@ final class DraggablePanel: NSPanel {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        didDrag = true
         let current = NSEvent.mouseLocation
         let dx = current.x - dragOrigin.x
         let dy = current.y - dragOrigin.y
+
+        // Only start dragging after a 3pt threshold to avoid accidental drags eating clicks
+        if !didDrag && (dx * dx + dy * dy) < 9 { return }
+        didDrag = true
+
         var newOrigin = CGPoint(
             x: windowOriginAtDragStart.x + dx,
             y: windowOriginAtDragStart.y + dy
