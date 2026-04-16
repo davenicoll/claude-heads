@@ -46,7 +46,7 @@ final class TerminalBridge: NSObject, TerminalViewDelegate {
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        guard masterFD >= 0 else { return }
+        guard masterFD >= 0, newCols > 0, newRows > 0 else { return }
 
         // Update the PTY window size via C helper (ioctl is unavailable in Swift)
         pty_set_window_size(masterFD, UInt16(newRows), UInt16(newCols))

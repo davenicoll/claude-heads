@@ -1,3 +1,4 @@
+import ClaudeHeadsCore
 import SwiftUI
 
 @main
@@ -36,9 +37,5 @@ struct ClaudeHeadsApp: App {
             .keyboardShortcut("q")
         }
 
-        Settings {
-            SettingsView()
-        }
     }
-
 }

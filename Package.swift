@@ -16,13 +16,23 @@ let package = Package(
             path: "Sources/CPTYHelpers",
             publicHeadersPath: "include"
         ),
-        .executableTarget(
-            name: "ClaudeHeads",
+        .target(
+            name: "ClaudeHeadsCore",
             dependencies: ["SwiftTerm", "CPTYHelpers"],
             path: "Sources/ClaudeHeads",
             resources: [
                 .process("Resources")
             ]
+        ),
+        .executableTarget(
+            name: "ClaudeHeads",
+            dependencies: ["ClaudeHeadsCore"],
+            path: "Sources/ClaudeHeadsApp"
+        ),
+        .testTarget(
+            name: "ClaudeHeadsCoreTests",
+            dependencies: ["ClaudeHeadsCore"],
+            path: "Tests/ClaudeHeadsCoreTests"
         ),
     ]
 )

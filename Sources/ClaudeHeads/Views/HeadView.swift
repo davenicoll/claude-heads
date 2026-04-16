@@ -2,34 +2,61 @@ import SwiftUI
 
 struct HeadView: View {
     let head: HeadInstance
-    var onTap: () -> Void
+
+    @State private var currentFaceText: String = HeadFace.awake.rawValue
+    @State private var timer: Timer?
+    @State private var sequencer = FaceSequencer()
 
     private var diameter: CGFloat {
         AppSettings.shared.headSize.diameter
     }
 
+    private var emojiSize: CGFloat {
+        diameter * 0.52
+    }
+
+    private var totalSize: CGFloat {
+        diameter + emojiSize
+    }
+
+    private var faceColor: Color {
+        .black
+    }
+
+    private var faceFontSize: CGFloat {
+        diameter * 0.36
+    }
+
     var body: some View {
         VStack(spacing: 2) {
-            ZStack {
-                // Circle background: avatar or path-derived gradient
-                circleBackground
-                    .frame(width: diameter, height: diameter)
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
-
-                // State indicator dot
-                stateIndicator
-                    .frame(width: 12, height: 12)
-                    .offset(x: diameter / 2 - 8, y: -(diameter / 2 - 8))
-
-                // Wave animation overlay
-                if head.isWaving {
-                    WaveEmoji()
-                        .offset(x: diameter / 2 - 4, y: -(diameter / 2 - 4))
+            circleBackground
+                .frame(width: diameter, height: diameter)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 3)
+                .overlay {
+                    Text(currentFaceText)
+                        .font(.system(size: faceFontSize, weight: .bold, design: .monospaced))
+                        .foregroundStyle(faceColor)
+                        .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+                        .offset(y: -diameter * 0.10)
+                        .allowsHitTesting(false)
                 }
-            }
+                .overlay(alignment: .topTrailing) {
+                    if AppSettings.shared.showStatusIndicator {
+                        stateIndicator
+                            .frame(width: 12, height: 12)
+                            .offset(x: 2, y: -2)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if head.isWaving {
+                        WaveEmoji(fontSize: emojiSize)
+                            .offset(x: -emojiSize * 0.3, y: -emojiSize * 0.4)
+                    }
+                }
+                .padding(.top, emojiSize * 0.5)
+                .frame(width: totalSize)
 
-            // Folder name label
             Text(head.name)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.white)
@@ -38,10 +65,35 @@ struct HeadView: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: diameter + 10)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap()
+        .onAppear { startTimer() }
+        .onDisappear { stopTimer() }
+        .onChange(of: head.state) { _, newState in
+            sequencer.setState(newState)
+            tick()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .headTapped)) { notification in
+            if let tappedID = notification.object as? UUID, tappedID == head.id {
+                sequencer.wake()
+                tick()
+            }
+        }
+    }
+
+    private func startTimer() {
+        sequencer.setState(head.state)
+        tick()
+        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            tick()
+        }
+    }
+
+    private func tick() {
+        currentFaceText = sequencer.next().rawValue
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
     }
 
     // MARK: - Circle Background
@@ -72,9 +124,9 @@ struct HeadView: View {
 
     private var stateColor: Color {
         switch head.state {
-        case .running: .green
-        case .idle: .orange
-        case .finished: .blue
+        case .idle: .green
+        case .running: .blue
+        case .finished: .orange
         case .errored: .red
         }
     }
@@ -83,16 +135,17 @@ struct HeadView: View {
 // MARK: - Wave Emoji Animation
 
 private struct WaveEmoji: View {
+    let fontSize: CGFloat
     @State private var angle: Double = 0
 
     var body: some View {
         Text("\u{1F44B}")
-            .font(.system(size: 20))
+            .font(.system(size: fontSize))
             .rotationEffect(.degrees(angle), anchor: .bottomTrailing)
             .onAppear {
                 withAnimation(
-                    .interpolatingSpring(stiffness: 200, damping: 5)
-                        .repeatCount(5, autoreverses: true)
+                    .easeInOut(duration: 0.3)
+                        .repeatCount(6, autoreverses: true)
                 ) {
                     angle = 30
                 }

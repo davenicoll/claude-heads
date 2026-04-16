@@ -47,18 +47,50 @@ final class AppSettings {
         didSet { save() }
     }
 
+    var showStatusIndicator: Bool {
+        didSet { save() }
+    }
+
+    var claudeContinue: Bool {
+        didSet { save() }
+    }
+
+    var claudeSkipPermissions: Bool {
+        didSet { save() }
+    }
+
+    var claudeRemoteControl: Bool {
+        didSet { save() }
+    }
+
+    /// Builds the CLI arguments from settings flags + extra args
+    var effectiveCLIArgs: [String] {
+        var args: [String] = []
+        if claudeContinue { args.append("--continue") }
+        if claudeSkipPermissions { args.append("--dangerously-skip-permissions") }
+        if claudeRemoteControl { args.append("--remote-control") }
+        let extra = defaultExtraArgs.trimmingCharacters(in: .whitespaces)
+        if !extra.isEmpty {
+            args.append(contentsOf: extra.components(separatedBy: .whitespaces).filter { !$0.isEmpty })
+        }
+        return args
+    }
+
     // MARK: - Persistence
 
     private static let userDefaultsKey = "com.claudeheads.appSettings"
 
     private init() {
-        // Set defaults before attempting to load
         self.defaultExtraArgs = ""
         self.terminalFontName = "Menlo"
         self.terminalFontSize = 12
         self.headSize = .medium
         self.snapDistance = 60
         self.launchAtLogin = false
+        self.showStatusIndicator = false
+        self.claudeContinue = true
+        self.claudeSkipPermissions = false
+        self.claudeRemoteControl = false
 
         load()
     }
@@ -74,6 +106,10 @@ final class AppSettings {
         headSize = stored.headSize
         snapDistance = stored.snapDistance
         launchAtLogin = stored.launchAtLogin
+        showStatusIndicator = stored.showStatusIndicator ?? false
+        claudeContinue = stored.claudeContinue ?? true
+        claudeSkipPermissions = stored.claudeSkipPermissions ?? false
+        claudeRemoteControl = stored.claudeRemoteControl ?? false
     }
 
     private func save() {
@@ -83,7 +119,11 @@ final class AppSettings {
             terminalFontSize: terminalFontSize,
             headSize: headSize,
             snapDistance: snapDistance,
-            launchAtLogin: launchAtLogin
+            launchAtLogin: launchAtLogin,
+            showStatusIndicator: showStatusIndicator,
+            claudeContinue: claudeContinue,
+            claudeSkipPermissions: claudeSkipPermissions,
+            claudeRemoteControl: claudeRemoteControl
         )
         if let data = try? JSONEncoder().encode(stored) {
             UserDefaults.standard.set(data, forKey: Self.userDefaultsKey)
@@ -100,4 +140,8 @@ private struct StoredSettings: Codable {
     let headSize: HeadSize
     let snapDistance: CGFloat
     let launchAtLogin: Bool
+    let showStatusIndicator: Bool?
+    let claudeContinue: Bool?
+    let claudeSkipPermissions: Bool?
+    let claudeRemoteControl: Bool?
 }

@@ -25,6 +25,9 @@ final class ProcessManager {
     /// Called on the main queue when a child process exits.
     var onProcessExit: ((pid_t, Int32) -> Void)?
 
+    /// Called on the main queue when PTY output is received (process is active).
+    var onProcessActivity: ((pid_t) -> Void)?
+
     private init() {
         startSIGCHLDMonitor()
     }
@@ -50,8 +53,10 @@ final class ProcessManager {
         var winSize = winsize()
 
         let terminal = terminalView.getTerminal()
-        winSize.ws_col = UInt16(terminal.cols)
-        winSize.ws_row = UInt16(terminal.rows)
+        let cols = max(terminal.cols, 80)
+        let rows = max(terminal.rows, 24)
+        winSize.ws_col = UInt16(cols)
+        winSize.ws_row = UInt16(rows)
         winSize.ws_xpixel = 0
         winSize.ws_ypixel = 0
 
@@ -69,11 +74,52 @@ final class ProcessManager {
                 _exit(1)
             }
 
-            // Build argv: ["claude", ...extraArgs]
-            let args = ["claude"] + extraArgs
-            // Convert to C strings for execvp
-            let cArgs = args.map { strdup($0) } + [nil]
-            execvp("claude", cArgs)
+            // GUI apps don't inherit the user's shell PATH, so set it up.
+            // Include common locations where claude and its dependencies live.
+            let home = String(cString: getenv("HOME") ?? strdup("/tmp"))
+            let path = [
+                "\(home)/.local/bin",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "\(home)/.nvm/versions/node/default/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/sbin",
+                "/sbin",
+            ].joined(separator: ":")
+            setenv("PATH", path, 1)
+            setenv("TERM", "xterm-256color", 1)
+            setenv("COLORTERM", "truecolor", 1)
+            setenv("LANG", "en_US.UTF-8", 1)
+
+            // Resolve claude's full path
+            let claudePaths = [
+                "\(home)/.local/bin/claude",
+                "/usr/local/bin/claude",
+                "/opt/homebrew/bin/claude",
+            ]
+            let claudeBin = claudePaths.first { access($0, X_OK) == 0 } ?? "claude"
+
+            // Build argv — separate --continue from other args so we can fall back
+            let settingsArgs = AppSettings.shared.effectiveCLIArgs
+            let wantsContinue = settingsArgs.contains("--continue")
+            let otherArgs = settingsArgs.filter { $0 != "--continue" } + extraArgs
+
+            if wantsContinue {
+                // Try --continue first via shell; if it fails (no session), start fresh
+                let allArgs = ([claudeBin, "--continue"] + otherArgs)
+                    .map { "'\($0)'" }.joined(separator: " ")
+                let freshArgs = ([claudeBin] + otherArgs)
+                    .map { "'\($0)'" }.joined(separator: " ")
+                let script = "\(allArgs) || \(freshArgs)"
+                let shellArgs = ["/bin/sh", "-c", script]
+                let cArgs = shellArgs.map { strdup($0) } + [nil]
+                execvp("/bin/sh", cArgs)
+            } else {
+                let args = [claudeBin] + otherArgs
+                let cArgs = args.map { strdup($0) } + [nil]
+                execvp(claudeBin, cArgs)
+            }
 
             // If execvp returns, it failed
             perror("execvp")
@@ -108,8 +154,11 @@ final class ProcessManager {
             let bytesRead = read(masterFD, &buffer, buffer.count)
 
             if bytesRead > 0 {
-                let slice = ArraySlice(buffer[0..<bytesRead])
-                terminalView.feed(byteArray: slice)
+                let data = Array(buffer[0..<bytesRead])
+                DispatchQueue.main.async { [weak self] in
+                    terminalView.feed(byteArray: ArraySlice(data))
+                    self?.onProcessActivity?(childPID)
+                }
             } else if bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN && errno != EINTR) {
                 // EOF or unrecoverable error -- the child likely exited
                 self?.cleanUp(pid: childPID)

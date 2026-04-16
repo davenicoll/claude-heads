@@ -1,15 +1,15 @@
 import AppKit
 import Foundation
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         createDirectoryStructure()
         writeHookNotificationScript()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         // AppState handles saving positions and killing processes via shutdown(),
         // but we guard against it not being called by the menu-bar quit path.
         // The @main App's ClaudeHeadsApp already calls appState.shutdown()

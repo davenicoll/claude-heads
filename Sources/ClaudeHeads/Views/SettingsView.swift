@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     private var settings = AppSettings.shared
+    @State private var monoFonts: [String] = []
 
     var body: some View {
         Form {
@@ -28,10 +29,18 @@ struct SettingsView: View {
                         step: 5
                     )
                 }
+
+                Toggle("Show status indicator", isOn: Bindable(settings).showStatusIndicator)
             }
 
             Section("Terminal") {
-                TextField("Font name", text: Bindable(settings).terminalFontName)
+                Picker("Font", selection: Bindable(settings).terminalFontName) {
+                    ForEach(monoFonts, id: \.self) { fontName in
+                        Text(fontName)
+                            .font(.custom(fontName, size: 13))
+                            .tag(fontName)
+                    }
+                }
 
                 HStack {
                     Text("Font size")
@@ -57,16 +66,59 @@ struct SettingsView: View {
             }
 
             Section {
-                TextField("Default extra arguments", text: Bindable(settings).defaultExtraArgs)
+                Toggle("Continue previous session (--continue)", isOn: Bindable(settings).claudeContinue)
+                Toggle("Skip permissions (--dangerously-skip-permissions)", isOn: Bindable(settings).claudeSkipPermissions)
+                Toggle("Remote control (--remote-control)", isOn: Bindable(settings).claudeRemoteControl)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Extra arguments")
+                        .font(.body)
+                    TextEditor(text: Bindable(settings).defaultExtraArgs)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(height: 54)
+                        .border(Color.secondary.opacity(0.3), width: 1)
+                }
             } header: {
-                Text("Claude CLI")
+                Text("Claude Code")
             } footer: {
-                Text("These arguments are passed to every new Claude CLI instance (e.g. \"--dangerously-skip-permissions\").")
+                Text("Flags and extra arguments are passed to every new Claude Code instance.")
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 450, height: 420)
+        .frame(width: 480, height: 720)
+        .onAppear {
+            monoFonts = findMonospaceFonts()
+        }
+        .onChange(of: settings.terminalFontName) {
+            NotificationCenter.default.post(name: .terminalFontChanged, object: nil)
+        }
+        .onChange(of: settings.terminalFontSize) {
+            NotificationCenter.default.post(name: .terminalFontChanged, object: nil)
+        }
+        .onChange(of: settings.headSize) {
+            NotificationCenter.default.post(name: .headSizeChanged, object: nil)
+        }
+    }
+
+    private func findMonospaceFonts() -> [String] {
+        let manager = NSFontManager.shared
+        var fonts: [String] = []
+        for family in manager.availableFontFamilies {
+            guard let members = manager.availableMembers(ofFontFamily: family) else { continue }
+            for member in members {
+                guard let fontName = member[0] as? String else { continue }
+                guard let font = NSFont(name: fontName, size: 13) else { continue }
+                if font.isFixedPitch {
+                    fonts.append(family)
+                    break
+                }
+            }
+        }
+        if !fonts.contains(settings.terminalFontName) {
+            fonts.append(settings.terminalFontName)
+        }
+        return fonts.sorted()
     }
 }
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - HeadState
 
-enum HeadState: String, Codable, Sendable {
+public enum HeadState: String, Codable, Sendable {
     case idle
     case running
     case finished
@@ -13,23 +13,23 @@ enum HeadState: String, Codable, Sendable {
 // MARK: - HeadInstance
 
 @Observable
-final class HeadInstance: Identifiable {
-    let id: UUID
-    var name: String
-    var folderPath: String
-    var extraArgs: [String]
-    var avatarImageData: Data?
-    var position: CGPoint
-    var screenID: UInt32
-    var isPinned: Bool
-    var state: HeadState
-    var isWaving: Bool
-    var snapGroupID: UUID?
+public final class HeadInstance: Identifiable {
+    public let id: UUID
+    public var name: String
+    public var folderPath: String
+    public var extraArgs: [String]
+    public var avatarImageData: Data?
+    public var position: CGPoint
+    public var screenID: UInt32
+    public var isPinned: Bool
+    public var state: HeadState
+    public var isWaving: Bool
+    public var snapGroupID: UUID?
 
     // Non-persisted runtime state
-    var processID: pid_t?
+    public var processID: pid_t?
 
-    init(
+    public init(
         id: UUID = UUID(),
         name: String,
         folderPath: String,
@@ -66,7 +66,7 @@ extension HeadInstance: Codable {
         case position, screenID, isPinned, state, isWaving, snapGroupID
     }
 
-    convenience init(from decoder: Decoder) throws {
+    public convenience init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             id: try container.decode(UUID.self, forKey: .id),
@@ -83,7 +83,7 @@ extension HeadInstance: Codable {
         )
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
@@ -102,11 +102,11 @@ extension HeadInstance: Codable {
 // MARK: - Hashable / Equatable
 
 extension HeadInstance: Hashable {
-    static func == (lhs: HeadInstance, rhs: HeadInstance) -> Bool {
+    public static func == (lhs: HeadInstance, rhs: HeadInstance) -> Bool {
         lhs.id == rhs.id
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
 }

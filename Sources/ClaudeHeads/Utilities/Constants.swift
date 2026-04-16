@@ -1,5 +1,11 @@
 import Foundation
 
+extension Notification.Name {
+    static let terminalFontChanged = Notification.Name("com.claudeheads.terminalFontChanged")
+    static let headSizeChanged = Notification.Name("com.claudeheads.headSizeChanged")
+    static let headTapped = Notification.Name("com.claudeheads.headTapped")
+}
+
 enum Constants {
 
     // MARK: - Directories & Paths
