@@ -1,0 +1,232 @@
+import Darwin
+import Foundation
+import SwiftTerm
+
+// MARK: - PTYInfo
+
+/// Holds the resources associated with a running PTY-backed process.
+struct PTYInfo {
+    let masterFD: Int32
+    let pid: pid_t
+    let readSource: DispatchSourceRead
+    weak var terminalView: TerminalView?
+    weak var bridge: TerminalBridge?
+}
+
+// MARK: - ProcessManager
+
+final class ProcessManager {
+    static let shared = ProcessManager()
+
+    /// Active processes keyed by child PID.
+    private var processes: [pid_t: PTYInfo] = [:]
+    private let lock = NSLock()
+
+    /// Called on the main queue when a child process exits.
+    var onProcessExit: ((pid_t, Int32) -> Void)?
+
+    private init() {
+        startSIGCHLDMonitor()
+    }
+
+    // MARK: - Spawn
+
+    /// Spawns a `claude` CLI process inside a pseudo-terminal.
+    ///
+    /// - Parameters:
+    ///   - folderPath: Working directory for the child process.
+    ///   - extraArgs: Additional arguments passed to `claude`.
+    ///   - terminalView: The SwiftTerm view that will display output.
+    ///   - bridge: The terminal bridge that writes user input back to the PTY.
+    /// - Returns: The child PID, or -1 on failure.
+    @discardableResult
+    func spawnProcess(
+        folderPath: String,
+        extraArgs: [String],
+        terminalView: TerminalView,
+        bridge: TerminalBridge
+    ) -> pid_t {
+        var masterFD: Int32 = 0
+        var winSize = winsize()
+
+        let terminal = terminalView.getTerminal()
+        winSize.ws_col = UInt16(terminal.cols)
+        winSize.ws_row = UInt16(terminal.rows)
+        winSize.ws_xpixel = 0
+        winSize.ws_ypixel = 0
+
+        let childPID = forkpty(&masterFD, nil, nil, &winSize)
+
+        guard childPID >= 0 else {
+            perror("forkpty")
+            return -1
+        }
+
+        if childPID == 0 {
+            // ---- Child process ----
+            if chdir(folderPath) != 0 {
+                perror("chdir")
+                _exit(1)
+            }
+
+            // Build argv: ["claude", ...extraArgs]
+            let args = ["claude"] + extraArgs
+            // Convert to C strings for execvp
+            let cArgs = args.map { strdup($0) } + [nil]
+            execvp("claude", cArgs)
+
+            // If execvp returns, it failed
+            perror("execvp")
+            _exit(127)
+        }
+
+        // ---- Parent process ----
+
+        // Configure the bridge to write to this master fd
+        bridge.masterFD = masterFD
+        bridge.childPID = childPID
+
+        // Set master fd to non-blocking
+        let flags = fcntl(masterFD, F_GETFL)
+        if flags >= 0 {
+            _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
+        }
+
+        // Create a dispatch source to read PTY output and feed it to the terminal
+        let readSource = DispatchSource.makeReadSource(
+            fileDescriptor: masterFD,
+            queue: DispatchQueue.global(qos: .userInteractive)
+        )
+
+        readSource.setEventHandler { [weak self, weak terminalView] in
+            guard let terminalView = terminalView else {
+                self?.cleanUp(pid: childPID)
+                return
+            }
+
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            let bytesRead = read(masterFD, &buffer, buffer.count)
+
+            if bytesRead > 0 {
+                let slice = ArraySlice(buffer[0..<bytesRead])
+                terminalView.feed(byteArray: slice)
+            } else if bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN && errno != EINTR) {
+                // EOF or unrecoverable error -- the child likely exited
+                self?.cleanUp(pid: childPID)
+            }
+        }
+
+        readSource.setCancelHandler {
+            close(masterFD)
+        }
+
+        readSource.resume()
+
+        let info = PTYInfo(
+            masterFD: masterFD,
+            pid: childPID,
+            readSource: readSource,
+            terminalView: terminalView,
+            bridge: bridge
+        )
+
+        lock.lock()
+        processes[childPID] = info
+        lock.unlock()
+
+        return childPID
+    }
+
+    // MARK: - Kill
+
+    /// Sends SIGINT to the process, then SIGKILL after 3 seconds if still alive.
+    func killProcess(pid: pid_t) {
+        guard isProcessRunning(pid: pid) else { return }
+
+        kill(pid, SIGINT)
+
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self = self, self.isProcessRunning(pid: pid) else { return }
+            kill(pid, SIGKILL)
+        }
+    }
+
+    // MARK: - Status
+
+    /// Returns `true` if the given PID is still a running process.
+    func isProcessRunning(pid: pid_t) -> Bool {
+        // kill with signal 0 checks existence without sending a signal
+        return kill(pid, 0) == 0
+    }
+
+    // MARK: - Resource Cleanup
+
+    private func cleanUp(pid: pid_t) {
+        lock.lock()
+        guard let info = processes.removeValue(forKey: pid) else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        info.readSource.cancel()
+
+        // Reap the child
+        var status: Int32 = 0
+        waitpid(pid, &status, WNOHANG)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onProcessExit?(pid, status)
+        }
+    }
+
+    // MARK: - SIGCHLD Monitoring
+
+    /// Monitors for child exits via a background thread calling waitpid.
+    private func startSIGCHLDMonitor() {
+        // Use a SIGCHLD dispatch source to detect child exits without blocking.
+        let sigSource = DispatchSource.makeSignalSource(signal: SIGCHLD, queue: .global(qos: .utility))
+        signal(SIGCHLD, SIG_IGN) // Let the dispatch source handle it
+
+        sigSource.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            // Reap all exited children
+            while true {
+                var status: Int32 = 0
+                let pid = waitpid(-1, &status, WNOHANG)
+                if pid <= 0 { break }
+                self.cleanUp(pid: pid)
+            }
+        }
+
+        sigSource.resume()
+
+        // Keep the source alive for the lifetime of the manager.
+        // Since ProcessManager is a singleton, this is fine.
+        objc_setAssociatedObject(self, "sigchldSource", sigSource, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    // MARK: - Accessors
+
+    /// Returns the PTYInfo for a given pid, if it exists.
+    func info(for pid: pid_t) -> PTYInfo? {
+        lock.lock()
+        defer { lock.unlock() }
+        return processes[pid]
+    }
+
+    /// Returns all active PIDs.
+    var activePIDs: [pid_t] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(processes.keys)
+    }
+
+    /// Kills all active processes.
+    func killAll() {
+        let pids = activePIDs
+        for pid in pids {
+            killProcess(pid: pid)
+        }
+    }
+}
