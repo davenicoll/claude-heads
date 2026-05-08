@@ -1,4 +1,4 @@
-# Claude Heads
+# Claude Heads (AKA a stupid experiment)
 
 A native macOS app that puts floating chat heads on your desktop, one per running Claude Code instance.
 
