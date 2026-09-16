@@ -1,5 +1,4 @@
 import AppKit
-import CPTYHelpers
 import Foundation
 import SwiftTerm
 
@@ -9,11 +8,10 @@ import SwiftTerm
 /// keystrokes to the child process and relaying size changes via TIOCSWINSZ / SIGWINCH.
 final class TerminalBridge: NSObject, TerminalViewDelegate {
 
-    /// The master side of the PTY. Set by `ProcessManager` after forking.
-    var masterFD: Int32 = -1
-
-    /// The child PID, used for sending SIGWINCH on size changes.
-    var childPID: pid_t = -1
+    /// The PTY session this view is attached to. Set by `ProcessManager` after forking.
+    /// All writes and resizes go through the session's serial queue, which checks that the
+    /// master fd is still open, so input can never be written to a closed descriptor.
+    weak var session: PTYSession?
 
     /// Optional callback when the terminal title changes.
     var onTitleChange: ((String) -> Void)?
@@ -24,37 +22,11 @@ final class TerminalBridge: NSObject, TerminalViewDelegate {
     // MARK: - TerminalViewDelegate
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        guard masterFD >= 0 else { return }
-
-        let bytes = Array(data)
-        bytes.withUnsafeBufferPointer { buffer in
-            guard let baseAddress = buffer.baseAddress else { return }
-            var totalWritten = 0
-            while totalWritten < bytes.count {
-                let written = write(
-                    masterFD,
-                    baseAddress.advanced(by: totalWritten),
-                    bytes.count - totalWritten
-                )
-                if written < 0 {
-                    if errno == EAGAIN || errno == EINTR { continue }
-                    break
-                }
-                totalWritten += written
-            }
-        }
+        session?.write(Array(data))
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        guard masterFD >= 0, newCols > 0, newRows > 0 else { return }
-
-        // Update the PTY window size via C helper (ioctl is unavailable in Swift)
-        pty_set_window_size(masterFD, UInt16(newRows), UInt16(newCols))
-
-        // Notify the child process of the size change
-        if childPID > 0 {
-            kill(childPID, SIGWINCH)
-        }
+        session?.resize(cols: newCols, rows: newRows)
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {

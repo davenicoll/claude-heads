@@ -88,12 +88,7 @@ public final class AppState {
         termController.bridge = bridge
         terminalControllers[head.id] = termController
 
-        let pid = processManager.spawnProcess(
-            folderPath: folderPath,
-            extraArgs: extraArgs,
-            terminalView: terminalView,
-            bridge: bridge
-        )
+        let pid = processManager.spawnProcess(head: head, terminalView: terminalView, bridge: bridge)
         if pid > 0 {
             head.processID = pid
             head.state = .running
@@ -365,12 +360,7 @@ public final class AppState {
             terminalControllers[head.id] = termController
 
             // Start the claude process immediately on restore
-            let pid = processManager.spawnProcess(
-                folderPath: head.folderPath,
-                extraArgs: head.extraArgs,
-                terminalView: terminalView,
-                bridge: bridge
-            )
+            let pid = processManager.spawnProcess(head: head, terminalView: terminalView, bridge: bridge)
             if pid > 0 {
                 head.processID = pid
                 head.state = .running
@@ -396,8 +386,7 @@ public final class AppState {
               let bridge = termController.bridge else { return }
 
         let pid = processManager.spawnProcess(
-            folderPath: head.folderPath,
-            extraArgs: head.extraArgs,
+            head: head,
             terminalView: termController.terminalView,
             bridge: bridge
         )
@@ -416,9 +405,11 @@ public final class AppState {
         try? data.write(to: Self.stateFileURL, options: .atomic)
     }
 
+    /// Synchronously stops every claude process (SIGHUP, ~2s grace, then SIGKILL) and persists
+    /// state. Blocks until all children are reaped so it is safe to call before terminating.
     public func shutdown() {
-        processManager.killAll()
         saveState()
+        processManager.killAll(timeout: 2.0)
     }
 
     // MARK: - Private Helpers
