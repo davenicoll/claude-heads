@@ -34,7 +34,7 @@ This is a description of how the shipped code is put together, organised by area
 
 - `AppState.handleProcessActivity`: on output, cancel any wave, set `.running` (recording the start time), and (re)arm a 2s idle timer. When the timer fires the head becomes `.idle`; if it had been running for at least 5s it waves for 2s. This filters out status-line blips.
 - `AppState.handleProcessExit`: set `.finished`, wave, close the terminal, remove the head after 10s.
-- `AppState.hookWatcher` (`HookWatcher`) watches `~/.claude-heads/hooks` for `<uuid>.done` markers written by `notify.sh` from the Claude Code `Stop` hook. `handleHookTaskComplete` cancels the heuristic idle timer, sets `.idle`, and waves; output arriving within a 1s grace window afterwards (Claude's prompt redraw) is ignored so the indicator does not flicker.
+- `AppState.hookWatcher` (`HookWatcher`) watches `~/.claude-heads/hooks` for `<uuid>.done` markers written by `notify.sh` from the Claude Code `Stop` hook. `handleHookTaskComplete` cancels the heuristic idle timer, sets `.idle`, and waves; output arriving within a 1s grace window afterwards (Claude's prompt redraw) is ignored so the indicator does not flicker. The same watcher parses `<uuid>.<agent_id>.start`/`.stop` markers from the `SubagentStart`/`SubagentStop` hooks into `onSubagentStart`/`onSubagentStop`, which add and remove `SubagentInstance`s on the head (`children`, not persisted); `handleHookTaskComplete` clears them.
 
 ## Persistence
 

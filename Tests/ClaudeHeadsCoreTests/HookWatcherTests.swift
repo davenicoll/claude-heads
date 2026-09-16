@@ -170,6 +170,195 @@ final class HookWatcherTests: XCTestCase {
                        "Marker should be removed after delivery")
     }
 
+    // MARK: Subagent markers (notify.sh)
+
+    private func subagentMarkerPath(_ id: String, agent: String, suffix: String) -> String {
+        tempDir.appendingPathComponent("\(id).\(agent).\(suffix)").path
+    }
+
+    func testSubagentStartWritesStartMarkerContainingType() throws {
+        let id = UUID().uuidString
+        let json = """
+        {"session_id":"abc","hook_event_name":"SubagentStart","agent_id":"agent-7f3","agent_type":"Explore","cwd":"/tmp"}
+        """
+        let status = try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: json)
+
+        XCTAssertEqual(status, 0)
+        let path = subagentMarkerPath(id, agent: "agent-7f3", suffix: "start")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path), "SubagentStart should write <uuid>.<agent>.start")
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "Explore")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)), "SubagentStart must not write .done")
+    }
+
+    func testSubagentStopWritesStopMarker() throws {
+        let id = UUID().uuidString
+        let json = """
+        {
+          "hook_event_name": "SubagentStop",
+          "agent_id": "a1b2c3",
+          "agent_type": "general-purpose"
+        }
+        """
+        let status = try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: json)
+
+        XCTAssertEqual(status, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: subagentMarkerPath(id, agent: "a1b2c3", suffix: "stop")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)))
+    }
+
+    func testSubagentEventWithoutAgentIDWritesNothing() throws {
+        let id = UUID().uuidString
+        let status = try runNotifyScript(
+            environment: [HookWatcher.instanceIDEnvironmentVariable: id],
+            stdin: "{\"hook_event_name\":\"SubagentStart\",\"agent_type\":\"Explore\"}"
+        )
+
+        XCTAssertEqual(status, 0)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertEqual(entries, ["notify.sh"])
+    }
+
+    func testSubagentIDIsSanitisedToSafeCharacters() throws {
+        let id = UUID().uuidString
+        let status = try runNotifyScript(
+            environment: [HookWatcher.instanceIDEnvironmentVariable: id],
+            stdin: "{\"hook_event_name\":\"SubagentStop\",\"agent_id\":\"../x.y/z\"}"
+        )
+
+        XCTAssertEqual(status, 0)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tempDir.path).sorted()
+        XCTAssertEqual(entries, ["\(id).xyz.stop", "notify.sh"].sorted())
+    }
+
+    func testInputWithoutEventNameFallsBackToDoneMarker() throws {
+        // Manual/legacy invocation: something on stdin but no hook_event_name.
+        let id = UUID().uuidString
+        try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: "not json at all")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerPath(id)))
+    }
+
+    func testOtherNamedEventsWriteNothing() throws {
+        // A user routing Notification/PreToolUse to notify.sh must not fake a Stop.
+        for event in ["Notification", "PreToolUse", "UserPromptSubmit"] {
+            let id = UUID().uuidString
+            let status = try runNotifyScript(
+                environment: [HookWatcher.instanceIDEnvironmentVariable: id],
+                stdin: "{\"hook_event_name\":\"\(event)\"}"
+            )
+            XCTAssertEqual(status, 0)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)), "\(event) must not write .done")
+        }
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertEqual(entries, ["notify.sh"])
+    }
+
+    func testEmptyPipedStdinWritesNothing() throws {
+        // bash 3.2 discards partial input on read timeout; an empty read must not become a Stop.
+        let id = UUID().uuidString
+        let status = try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: "")
+        XCTAssertEqual(status, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)))
+    }
+
+    func testDeliveryOrderIsChronologicalWithDoneLast() throws {
+        let id = UUID().uuidString
+        let fm = FileManager.default
+        let base = Date(timeIntervalSinceNow: -60)
+        func write(_ name: String, at offset: TimeInterval) throws {
+            let path = tempDir.appendingPathComponent(name).path
+            fm.createFile(atPath: path, contents: Data())
+            try fm.setAttributes([.modificationDate: base.addingTimeInterval(offset)], ofItemAtPath: path)
+        }
+        // Filename order would be: .done, .aaa.start, .zzz.start, .zzz.stop -- none of which is what happened.
+        try write("\(id).zzz.start", at: 0)
+        try write("\(id).zzz.stop", at: 1)
+        try write("\(id).aaa.start", at: 2)
+        try write("\(id).done", at: 2)   // same instant as aaa.start: done must come after it
+
+        let ordered = HookWatcher.deliveryOrder(try fm.contentsOfDirectory(atPath: tempDir.path), in: tempDir)
+        XCTAssertEqual(ordered, ["\(id).zzz.start", "\(id).zzz.stop", "\(id).aaa.start", "\(id).done"])
+    }
+
+    // MARK: HookMarker parsing
+
+    func testParseDoneMarker() {
+        let id = UUID()
+        XCTAssertEqual(HookMarker.parse(filename: "\(id.uuidString).done"), .taskComplete(instance: id))
+    }
+
+    func testParseSubagentMarkers() {
+        let id = UUID()
+        XCTAssertEqual(
+            HookMarker.parse(filename: "\(id.uuidString).agent-7f3.start"),
+            .subagentStart(instance: id, agentID: "agent-7f3")
+        )
+        XCTAssertEqual(
+            HookMarker.parse(filename: "\(id.uuidString).a1b2c3.stop"),
+            .subagentStop(instance: id, agentID: "a1b2c3")
+        )
+    }
+
+    func testParseRejectsMalformedMarkers() {
+        let id = UUID().uuidString
+        XCTAssertNil(HookMarker.parse(filename: "notify.sh"))
+        XCTAssertNil(HookMarker.parse(filename: "\(id).start"), "start needs an agent id")
+        XCTAssertNil(HookMarker.parse(filename: "\(id)..stop"), "empty agent id")
+        XCTAssertNil(HookMarker.parse(filename: "\(id).agent.extra.done"), "done takes no agent id")
+        XCTAssertNil(HookMarker.parse(filename: "not-a-uuid.agent.start"))
+        XCTAssertNil(HookMarker.parse(filename: "\(id).bad/agent.start"))
+        XCTAssertNil(HookMarker.parse(filename: "\(id).agent.tmp"), "temp files are not markers")
+    }
+
+    func testAgentTypeFromContentsFallsBackAndTrims() {
+        XCTAssertEqual(HookMarker.agentType(fromContents: nil), "agent")
+        XCTAssertEqual(HookMarker.agentType(fromContents: Data()), "agent")
+        XCTAssertEqual(HookMarker.agentType(fromContents: Data(" Explore\n".utf8)), "Explore")
+    }
+
+    // MARK: Subagent events (HookWatcher)
+
+    func testStartMarkerTriggersOnSubagentStartWithType() throws {
+        let watcher = HookWatcher(hooksDirectory: tempDir)
+        let id = UUID()
+
+        let received = expectation(description: "onSubagentStart called")
+        var got: (UUID, String, String)?
+        watcher.onSubagentStart = { instance, agentID, type in
+            got = (instance, agentID, type)
+            received.fulfill()
+        }
+        let notDone = expectation(description: "onTaskComplete must not fire for a start marker")
+        notDone.isInverted = true
+        watcher.onTaskComplete = { _ in notDone.fulfill() }
+
+        let path = subagentMarkerPath(id.uuidString, agent: "agent-1", suffix: "start")
+        try "Explore".write(toFile: path, atomically: true, encoding: .utf8)
+
+        wait(for: [received, notDone], timeout: 5.0)
+        XCTAssertEqual(got?.0, id)
+        XCTAssertEqual(got?.1, "agent-1")
+        XCTAssertEqual(got?.2, "Explore")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path), "Marker should be removed after delivery")
+    }
+
+    func testStopMarkerTriggersOnSubagentStop() throws {
+        let watcher = HookWatcher(hooksDirectory: tempDir)
+        let id = UUID()
+
+        let received = expectation(description: "onSubagentStop called")
+        var got: (UUID, String)?
+        watcher.onSubagentStop = { instance, agentID in
+            got = (instance, agentID)
+            received.fulfill()
+        }
+
+        FileManager.default.createFile(atPath: subagentMarkerPath(id.uuidString, agent: "agent-1", suffix: "stop"), contents: nil)
+
+        wait(for: [received], timeout: 5.0)
+        XCTAssertEqual(got?.0, id)
+        XCTAssertEqual(got?.1, "agent-1")
+    }
+
     func testPreExistingMarkersAreSweptWithoutNotifying() throws {
         let staleID = UUID()
         FileManager.default.createFile(atPath: markerPath(staleID.uuidString), contents: nil)

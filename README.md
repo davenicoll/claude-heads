@@ -15,6 +15,7 @@ Heads are only created for sessions started from the app; it does not discover `
 - Magnetic snap: drop a head near another and it snaps edge-to-edge
 - Multi-monitor aware with position memory across launches
 - Wave animation when Claude goes idle after working
+- Subagent orbit: with the `SubagentStart`/`SubagentStop` hooks configured, each Claude Code subagent appears as a small head (coloured by agent type, hover for the agent type) orbiting its parent until it finishes
 - Configurable terminal font, head size, snap distance, and default CLI flags/arguments
 - Menu bar app (no dock icon)
 
@@ -69,7 +70,7 @@ agent (`LSUIElement`), so it has no Dock icon; look for it in the menu bar.
 
 ## Hook Setup
 
-To get wave-on-completion notifications, add a `Stop` hook to `~/.claude/settings.json`:
+To get wave-on-completion notifications and the subagent orbit, add `Stop`, `SubagentStart` and `SubagentStop` hooks to `~/.claude/settings.json`, all pointing at the same script:
 
 ```json
 {
@@ -83,11 +84,31 @@ To get wave-on-completion notifications, add a `Stop` hook to `~/.claude/setting
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude-heads/hooks/notify.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude-heads/hooks/notify.sh"
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-Claude Code runs the hook with the event JSON on stdin and no arguments. Claude Heads exports `CLAUDE_INSTANCE_ID` (the head's UUID) into each `claude` process it spawns, and `notify.sh` uses that to tell the app which head finished. When `CLAUDE_INSTANCE_ID` is not set (for example, a `claude` session you started yourself in a normal terminal) the script exits silently, so it is safe to leave the hook configured globally.
+Claude Code runs the hook with the event JSON on stdin and no arguments. Claude Heads exports `CLAUDE_INSTANCE_ID` (the head's UUID) into each `claude` process it spawns, and `notify.sh` reads `hook_event_name` from stdin to tell the app which head finished (`Stop`) or which subagent started or stopped under it (`SubagentStart`/`SubagentStop`, using `agent_id` and `agent_type`). Only the `Stop` hook is needed for waves; the two subagent hooks are optional and only power the orbit. When `CLAUDE_INSTANCE_ID` is not set (for example, a `claude` session you started yourself in a normal terminal) the script exits silently, so it is safe to leave the hooks configured globally.
 
 The app (re)writes `~/.claude-heads/hooks/notify.sh` on every launch, so do not edit it by hand.
