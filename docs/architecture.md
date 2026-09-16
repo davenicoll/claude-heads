@@ -68,7 +68,7 @@ Each head also owns a `FloatingTerminalPanel` (`NSPanel`, `[.titled, .closable, 
 4. In the parent, a `DispatchSourceRead` on the PTY master feeds bytes to `TerminalView.feed` on the main queue and fires `onProcessActivity`.
 5. `AppState` maps activity to head state: any output marks the head `.running`; 2s of silence marks it `.idle`. If the running stretch lasted at least 5s, the head waves for 2s.
 6. Child exit is detected by EOF on the PTY or a `SIGCHLD` dispatch source (children are reaped with `waitpid`). The head becomes `.finished`, waves, its terminal closes, and the head is removed 10s later.
-7. On quit, `AppState.shutdown()` saves state and sends `SIGINT` to every child, escalating to `SIGKILL` after 3s.
+7. On quit, `AppState.shutdown()` sends `SIGINT` to every child and saves state, then the app terminates immediately. The 3s `SIGKILL` escalation in `ProcessManager.killProcess` only applies to heads removed while the app is still running.
 8. On launch, `AppState.restoreHeads()` reads `state.json` and re-spawns `claude` for every saved head.
 
 ## Hook Integration

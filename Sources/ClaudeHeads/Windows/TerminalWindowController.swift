@@ -145,10 +145,17 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Unpinned terminals auto-close when the user clicks away (another window or app
-    /// becomes key). Pinned terminals stay open until explicitly closed.
+    /// becomes key). Pinned terminals stay open until explicitly closed. Focus moving
+    /// to another head's terminal does not count as clicking away, so several
+    /// terminals can be open side by side.
     func windowDidResignKey(_ notification: Notification) {
         guard !head.isPinned, panel.isVisible else { return }
-        close()
+        // The new key window is only known once the resign/become cycle completes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.head.isPinned, self.panel.isVisible, !self.panel.isKeyWindow else { return }
+            if NSApp.keyWindow is FloatingTerminalPanel { return }
+            self.close()
+        }
     }
 
     // MARK: - Positioning
@@ -252,7 +259,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
         // If no clean placement found, try adjusting horizontal position for vertical placements
         if bestOrigin == nil {
             for dir in prioritized {
-                var origin = clamp(originFor(dir))
+                let origin = clamp(originFor(dir))
                 if fitsOnScreen(origin) {
                     // Try nudging horizontally to avoid overlaps
                     for nudge in stride(from: 0.0, through: sf.width, by: 50) {

@@ -28,7 +28,7 @@ This is a description of how the shipped code is put together, organised by area
 - Exits are caught two ways: EOF/error on the PTY, and a `SIGCHLD` dispatch source that reaps with `waitpid(-1, WNOHANG)`. Both funnel into `cleanUp`, which cancels the read source (closing the fd) and fires `onProcessExit` on the main queue.
 - `TerminalBridge` implements `TerminalViewDelegate`: writes keystrokes to the master fd, propagates size changes via `pty_set_window_size` + `SIGWINCH`, opens links, copies to the clipboard, beeps on bell.
 - `TerminalWindowController` owns a `FloatingTerminalPanel` (titled, closable, resizable, non-activating, `.floating`). `showWindow` ensures the process is running, positions the panel near the head avoiding obstacles, and makes the terminal view first responder. Close hides the panel rather than destroying it.
-- Pinning: `windowDidResignKey` closes the panel unless `head.isPinned`. A pin/unpin `NSButton` is installed as a trailing `NSTitlebarAccessoryViewController`; toggling it flips `isPinned` and saves state.
+- Pinning: `windowDidResignKey` closes the panel unless `head.isPinned` or the new key window is another `FloatingTerminalPanel`. A pin/unpin `NSButton` is installed as a trailing `NSTitlebarAccessoryViewController`; toggling it flips `isPinned` and saves state.
 
 ## State Machine and Wave
 

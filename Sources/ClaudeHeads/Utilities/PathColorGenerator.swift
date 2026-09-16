@@ -35,7 +35,7 @@ enum PathColorGenerator {
 
     /// Returns .white or .black depending on which contrasts better with the path's color.
     static func contrastColor(for path: String) -> Color {
-        let (hue, saturation, lightness) = hslComponents(for: path)
+        let (_, _, lightness) = hslComponents(for: path)
         // Average lightness of the gradient (second color is darker by 0.08)
         let avgLightness = (lightness + max(0.30, lightness - 0.08)) / 2.0
         // Use white text for dark backgrounds, black for light

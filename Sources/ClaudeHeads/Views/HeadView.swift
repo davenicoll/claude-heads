@@ -47,10 +47,10 @@ struct HeadView: View {
                 .overlay(alignment: .topLeading) {
                     if head.isWaving {
                         WaveEmoji(fontSize: emojiSize)
-                            .offset(x: -emojiSize * 0.3, y: -emojiSize * 0.4)
+                            .offset(x: emojiSize * HeadGeometry.emojiOffsetX, y: emojiSize * HeadGeometry.emojiOffsetY)
                     }
                 }
-                .padding(.top, emojiSize * 0.5)
+                .padding(.top, emojiSize * HeadGeometry.emojiTopPadding)
                 .frame(width: totalSize)
 
             Text(head.name)

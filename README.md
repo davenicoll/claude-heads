@@ -10,7 +10,7 @@ Heads are only created for sessions started from the app; it does not discover `
 
 - Floating always-on-top chat heads, one per `claude` CLI process spawned by the app
 - Click a head to open a floating terminal (SwiftTerm) attached to the session's PTY; keyboard input goes straight to `claude`
-- Pin a terminal from its title bar to keep it open when you click away; unpinned terminals close on focus loss
+- Pin a terminal from its title bar to keep it open when you click away; unpinned terminals close when focus moves to another app or a non-terminal window (switching between head terminals keeps them open)
 - Auto-generated gradient backgrounds derived from the folder path
 - Magnetic snap: drop a head near another and it snaps edge-to-edge
 - Multi-monitor aware with position memory across launches

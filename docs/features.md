@@ -20,14 +20,14 @@ This describes what the app does today. Anything not listed here is not implemen
 - Full terminal emulation via SwiftTerm (ANSI colours, cursor movement, scrollback); resizing the window resizes the PTY
 - Keyboard input in the terminal goes to the `claude` process; links open in the browser; copy goes to the clipboard
 - The terminal opens next to its head, toward the screen centre, avoiding other heads and open terminals, and follows the head while it is dragged
-- Pin button in the terminal title bar: a pinned terminal stays open when you click elsewhere; an unpinned terminal closes when it loses focus. Pin state is persisted per head
+- Pin button in the terminal title bar: a pinned terminal stays open when you click elsewhere; an unpinned terminal closes when focus moves to another app or a non-terminal window (switching between head terminals keeps both open). Pin state is persisted per head
 
 ## Process Management
 
 - Launch a new session from the menu bar ("New Head...", Cmd-N): choose a folder, and `claude` starts in it
 - Global Claude Code flags in Settings: `--continue` (with automatic fallback to a fresh session if none exists), `--dangerously-skip-permissions`, `--remote-control`, plus free-form extra arguments; all are applied to every new session
 - Sessions persist: on relaunch the app re-spawns `claude` for every saved head
-- Graceful shutdown: `SIGINT`, then `SIGKILL` after 3 seconds
+- Shutdown: on quit, `shutdown()` sends `SIGINT` to every child and saves state; the 3s `SIGKILL` escalation in `killProcess` only applies to heads removed while the app is still running
 - When a process exits the head shows a finished state, waves, closes its terminal and disappears after 10 seconds
 
 ## Wave Animation

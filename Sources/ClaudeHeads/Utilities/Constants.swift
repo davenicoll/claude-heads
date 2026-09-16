@@ -35,8 +35,14 @@ enum Constants {
 struct HeadGeometry {
     /// Wave emoji font size as a fraction of the circle diameter.
     static let emojiScale: CGFloat = 0.52
-    /// How much of the emoji extends above the circle, as a fraction of the emoji size.
+    /// Vertical window slack reserved above the circle for the emoji, as a fraction
+    /// of the emoji size. Must be at least `emojiTopPadding` so the emoji is not clipped.
     static let emojiOverhang: CGFloat = 0.6
+    /// Top padding `HeadView` adds above the circle for the emoji, as a fraction of the emoji size.
+    static let emojiTopPadding: CGFloat = 0.5
+    /// Emoji offset from the circle's top-left corner, as fractions of the emoji size.
+    static let emojiOffsetX: CGFloat = -0.3
+    static let emojiOffsetY: CGFloat = -0.4
     /// Height reserved for the name label under the circle.
     static let labelHeight: CGFloat = 14
     /// Vertical spacing between the circle stack and the label.

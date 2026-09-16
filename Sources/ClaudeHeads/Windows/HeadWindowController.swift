@@ -61,18 +61,24 @@ final class DraggablePanel: NSPanel {
             y: windowOriginAtDragStart.y + dy
         )
 
-        // Clamp so the circle stays on screen. The window includes emoji padding
-        // and a label, but only the circle needs to stay visible.
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(current) }) ?? NSScreen.main {
-            let sf = screen.visibleFrame
-            let g = HeadGeometry.current
-
-            newOrigin.x = max(sf.minX - g.circleOffsetX, min(newOrigin.x, sf.maxX - g.circleOffsetX - g.diameter))
-            newOrigin.y = max(sf.minY - g.circleBottomY, min(newOrigin.y, sf.maxY - g.circleTopY))
-        }
+        newOrigin = clampedToScreen(newOrigin, near: current)
 
         onDragMoved?(newOrigin)
         setFrameOrigin(newOrigin)
+    }
+
+    /// Clamps a window origin so the head's circle stays fully inside the visible
+    /// frame of the screen containing `point` (or this panel's screen). The window
+    /// includes emoji padding and a label, but only the circle needs to stay visible.
+    func clampedToScreen(_ origin: CGPoint, near point: CGPoint? = nil) -> CGPoint {
+        let screen = point.flatMap { p in NSScreen.screens.first(where: { $0.frame.contains(p) }) }
+            ?? self.screen ?? NSScreen.main
+        guard let sf = screen?.visibleFrame else { return origin }
+        let g = HeadGeometry.current
+        var clamped = origin
+        clamped.x = max(sf.minX - g.circleOffsetX, min(clamped.x, sf.maxX - g.circleOffsetX - g.diameter))
+        clamped.y = max(sf.minY - g.circleBottomY, min(clamped.y, sf.maxY - g.circleTopY))
+        return clamped
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -136,7 +142,8 @@ final class HeadWindowController {
 
         panel.onDragEnded = { [weak self] finalOrigin in
             guard let self else { return }
-            let snapped = self.snappedOrigin(for: finalOrigin)
+            // Snap first, then re-clamp: SnapEngine knows nothing about screen bounds.
+            let snapped = self.panel.clampedToScreen(self.snappedOrigin(for: finalOrigin))
             self.head.position = snapped
             if snapped != finalOrigin {
                 self.panel.setFrameOrigin(snapped)
@@ -178,17 +185,24 @@ final class HeadWindowController {
     /// otherwise the proposed origin unchanged.
     ///
     /// Head origins all share the same window geometry, so snapping origins
-    /// `diameter` apart puts the circles exactly edge-to-edge.
+    /// `diameter` apart puts the circles exactly edge-to-edge horizontally. When
+    /// snapping vertically the gap is widened by the label strip so the upper
+    /// head's name label is not drawn over the lower head's circle.
     private func snappedOrigin(for proposed: CGPoint) -> CGPoint {
         guard let appState else { return proposed }
         let diameter = AppSettings.shared.headSize.diameter
-        let snapped = snapEngine.snapPosition(
+        var snapped = snapEngine.snapPosition(
             for: head.id,
             proposedPosition: proposed,
             allHeads: appState.heads,
             headSize: diameter,
             snapDistance: AppSettings.shared.snapDistance
         )
+
+        if snapped.y != proposed.y {
+            let labelStrip = HeadGeometry.labelHeight + HeadGeometry.labelSpacing
+            snapped.y += (snapped.y > proposed.y ? 1 : -1) * labelStrip
+        }
 
         // Never snap directly on top of another head (both axes centre-aligned).
         let overlapsOther = appState.heads.contains { other in
