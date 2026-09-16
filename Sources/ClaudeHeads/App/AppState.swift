@@ -54,6 +54,12 @@ public final class AppState {
         hookWatcher.onTaskComplete = { [weak self] headID in
             self?.handleHookTaskComplete(headID: headID)
         }
+        hookWatcher.onSubagentStart = { [weak self] headID, agentID, agentType in
+            self?.handleSubagentStart(headID: headID, agentID: agentID, agentType: agentType)
+        }
+        hookWatcher.onSubagentStop = { [weak self] headID, agentID in
+            self?.handleSubagentStop(headID: headID, agentID: agentID)
+        }
 
         // Wire up font change notifications
         NotificationCenter.default.addObserver(
@@ -273,7 +279,27 @@ public final class AppState {
             head.state = .idle
         }
         hookIdleAt[headID] = Date()
+        // The turn is over, so every subagent it spawned is done too (even if a
+        // SubagentStop marker was lost).
+        if !head.children.isEmpty {
+            head.children.removeAll()
+        }
         triggerWave(for: head)
+    }
+
+    /// Called when the Claude Code SubagentStart hook fires for a head (via HookWatcher).
+    private func handleSubagentStart(headID: UUID, agentID: String, agentType: String) {
+        guard let head = heads.first(where: { $0.id == headID }) else { return }
+        // Deliberately not marking the head as hooked: a user may have configured only the
+        // subagent hooks, and the Stop hook alone decides whether the idle heuristic yields.
+        guard !head.children.contains(where: { $0.id == agentID }) else { return }
+        head.children.append(SubagentInstance(id: agentID, type: agentType))
+    }
+
+    /// Called when the Claude Code SubagentStop hook fires for a head (via HookWatcher).
+    private func handleSubagentStop(headID: UUID, agentID: String) {
+        guard let head = heads.first(where: { $0.id == headID }) else { return }
+        head.children.removeAll { $0.id == agentID }
     }
 
     private func handleProcessActivity(pid: pid_t) {
@@ -341,6 +367,7 @@ public final class AppState {
         // Show finished state with wave animation
         head.state = .finished
         head.isWaving = true
+        head.children.removeAll()
 
         // Close the terminal window
         terminalControllers[head.id]?.close()

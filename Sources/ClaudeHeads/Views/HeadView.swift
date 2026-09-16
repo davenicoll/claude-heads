@@ -50,6 +50,11 @@ struct HeadView: View {
                             .offset(x: emojiSize * HeadGeometry.emojiOffsetX, y: emojiSize * HeadGeometry.emojiOffsetY)
                     }
                 }
+                .overlay {
+                    // Subagents orbit the circle; the overlay is centred on it and is
+                    // allowed to draw outside its bounds (the hosting panel is enlarged).
+                    SubagentOrbitView(children: head.children, layout: OrbitLayout(parentDiameter: diameter))
+                }
                 .padding(.top, emojiSize * HeadGeometry.emojiTopPadding)
                 .frame(width: totalSize)
 
@@ -146,5 +151,87 @@ private struct WaveEmoji: View {
                     angle = 30
                 }
             }
+    }
+}
+
+// MARK: - Subagent Orbit
+
+/// Draws each of a head's subagents as a small head on a slowly rotating ring around
+/// the parent circle. The ring only animates while there are children; with none it
+/// renders nothing and schedules no frames.
+struct SubagentOrbitView: View {
+    let children: [SubagentInstance]
+    let layout: OrbitLayout
+
+    @State private var hoveredID: String?
+
+    private var childIDs: [String] { children.map(\.id) }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: children.isEmpty)) { context in
+            let phase = OrbitLayout.phase(at: context.date)
+            ZStack {
+                ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
+                    let o = layout.offset(index: index, count: children.count, phase: phase)
+                    SubagentHeadView(child: child, diameter: layout.childDiameter, isHovered: hoveredID == child.id)
+                        .offset(x: o.dx, y: -o.dy)
+                        .onHover { inside in
+                            if inside {
+                                hoveredID = child.id
+                            } else if hoveredID == child.id {
+                                hoveredID = nil
+                            }
+                        }
+                        .transition(.scale(scale: 0.2).combined(with: .opacity))
+                }
+            }
+        }
+        .animation(.spring(duration: 0.35), value: childIDs)
+        .allowsHitTesting(!children.isEmpty)
+        .onChange(of: childIDs) { _, ids in
+            if let hoveredID, !ids.contains(hoveredID) { self.hoveredID = nil }
+        }
+    }
+}
+
+/// A single orbiting subagent: a miniature head coloured by its agent type, with a
+/// caption showing the type while hovered.
+private struct SubagentHeadView: View {
+    let child: SubagentInstance
+    let diameter: CGFloat
+    let isHovered: Bool
+
+    private var colorKey: String { "subagent:" + child.type.lowercased() }
+
+    var body: some View {
+        PathColorGenerator.gradient(for: colorKey)
+            .frame(width: diameter, height: diameter)
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1))
+            .shadow(color: .black.opacity(0.45), radius: 3, x: 0, y: 2)
+            .overlay {
+                Text(HeadFace.intense.rawValue)
+                    .font(.system(size: diameter * 0.36, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.black)
+                    .offset(y: -diameter * 0.10)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .top) {
+                if isHovered {
+                    Text(child.type)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.75), in: Capsule())
+                        .fixedSize()
+                        .offset(y: -(diameter * 0.35 + 14))
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .help(child.type)
+            .accessibilityLabel("Subagent \(child.type)")
     }
 }

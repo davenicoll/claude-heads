@@ -10,6 +10,24 @@ public enum HeadState: String, Codable, Sendable {
     case errored
 }
 
+// MARK: - SubagentInstance
+
+/// A Claude Code subagent running under a head, reported by the SubagentStart hook.
+/// Rendered as a small head orbiting its parent. Runtime-only, never persisted.
+public struct SubagentInstance: Identifiable, Hashable, Sendable {
+    /// The `agent_id` from the hook payload.
+    public let id: String
+    /// The `agent_type` from the hook payload (e.g. `Explore`, `general-purpose`).
+    public let type: String
+    public let startedAt: Date
+
+    public init(id: String, type: String, startedAt: Date = Date()) {
+        self.id = id
+        self.type = type
+        self.startedAt = startedAt
+    }
+}
+
 // MARK: - HeadInstance
 
 @Observable
@@ -28,6 +46,8 @@ public final class HeadInstance: Identifiable {
 
     // Non-persisted runtime state
     public var processID: pid_t?
+    /// Subagents currently running under this head (SubagentStart .. SubagentStop).
+    public var children: [SubagentInstance]
 
     public init(
         id: UUID = UUID(),
@@ -41,7 +61,8 @@ public final class HeadInstance: Identifiable {
         state: HeadState = .idle,
         isWaving: Bool = false,
         snapGroupID: UUID? = nil,
-        processID: pid_t? = nil
+        processID: pid_t? = nil,
+        children: [SubagentInstance] = []
     ) {
         self.id = id
         self.name = name
@@ -55,6 +76,7 @@ public final class HeadInstance: Identifiable {
         self.isWaving = isWaving
         self.snapGroupID = snapGroupID
         self.processID = processID
+        self.children = children
     }
 }
 
