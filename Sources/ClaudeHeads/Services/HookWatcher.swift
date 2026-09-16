@@ -116,10 +116,13 @@ final class HookWatcher {
     /// process by ProcessManager), falling back to `$1` for manual invocation. If neither
     /// is set the script exits 0 silently so it never breaks a user's claude session.
     ///
-    /// The event is taken from `hook_event_name` in the stdin JSON. `Stop` (or no/unknown
-    /// event, for backwards compatibility) writes `<uuid>.done`; `SubagentStart` writes
-    /// `<uuid>.<agent_id>.start` containing `agent_type`; `SubagentStop` writes
-    /// `<uuid>.<agent_id>.stop`. Only stock macOS tools are used (bash, sed, tr, mv).
+    /// The event is taken from `hook_event_name` in the stdin JSON. `Stop` (or no event
+    /// name at all, for manual/legacy invocation) writes `<uuid>.done`; `SubagentStart`
+    /// writes `<uuid>.<agent_id>.start` containing `agent_type`; `SubagentStop` writes
+    /// `<uuid>.<agent_id>.stop`. Any other named event (Notification, PreToolUse, ...)
+    /// writes nothing, and so does a piped stdin that yields no input (e.g. a writer that
+    /// held the pipe open past the read timeout), so a stray hook can never fake a Stop
+    /// and wipe a head's subagents. Only stock macOS tools are used (bash, sed, tr, mv).
     static let notifyScriptContent = """
     #!/bin/bash
     # Claude Heads hook.
@@ -134,6 +137,7 @@ final class HookWatcher {
     #   Stop          -> <uuid>.done
     #   SubagentStart -> <uuid>.<agent_id>.start   (contents: agent_type)
     #   SubagentStop  -> <uuid>.<agent_id>.stop
+    #   anything else -> nothing
     #
     # This script must never fail the user's claude session: it always exits 0.
 
@@ -159,6 +163,11 @@ final class HookWatcher {
     INPUT=""
     if [ ! -t 0 ]; then
         IFS= read -r -t 2 -d '' INPUT 2>/dev/null || true
+        # bash 3.2 discards partial input on timeout; with nothing to go on, do nothing
+        # rather than guess (a guessed Stop would wave the head and clear its subagents).
+        if [ -z "${INPUT}" ]; then
+            exit 0
+        fi
     fi
 
     # Extract a top-level string field from the JSON with sed only (no jq/python needed).
@@ -192,9 +201,12 @@ final class HookWatcher {
                 write_marker "${HOOKS_DIR}/${INSTANCE_ID}.${AGENT_ID}.stop" ""
             fi
             ;;
-        *)
-            # Stop, or an unknown/missing event name: treat as task completion.
+        Stop|"")
+            # Stop, or no event name (manual/legacy invocation): task completion.
             touch "${HOOKS_DIR}/${INSTANCE_ID}.done" 2>/dev/null || true
+            ;;
+        *)
+            # Some other hook event routed here (Notification, PreToolUse, ...): not ours.
             ;;
     esac
 
@@ -274,15 +286,17 @@ final class HookWatcher {
     /// Scans the hooks directory for marker files, parses and deletes them and, when
     /// `notify` is true, delivers each event to the matching callback on the main queue.
     ///
-    /// Markers are delivered in filename-sorted order within a scan so that a `.start`
-    /// and `.stop` for the same agent written back-to-back arrive in that order.
+    /// Markers coalesced into one scan are delivered chronologically (by modification
+    /// date), so a `.start` and `.stop` for the same agent written back-to-back arrive
+    /// in that order. When timestamps tie, `.done` markers are delivered after the
+    /// subagent markers so a Stop never leaves an orphan child that started just before it.
     private func scanForMarkers(notify: Bool) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: hooksDirectory.path) else {
             return
         }
 
-        for entry in entries.sorted() {
+        for entry in Self.deliveryOrder(entries, in: hooksDirectory) {
             guard let suffix = entry.split(separator: ".").last.map(String.init),
                   HookMarker.knownSuffixes.contains(suffix) else { continue }
 
@@ -314,5 +328,20 @@ final class HookWatcher {
                 }
             }
         }
+    }
+
+    /// Orders directory entries for delivery: oldest first by modification date, then
+    /// `.done` after other markers, then by filename so the order is deterministic.
+    static func deliveryOrder(_ entries: [String], in directory: URL) -> [String] {
+        let fm = FileManager.default
+        func key(_ entry: String) -> (Date, Int, String) {
+            let path = directory.appendingPathComponent(entry).path
+            let date = (try? fm.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+            let isDone = entry.hasSuffix("." + HookMarker.doneSuffix) ? 1 : 0
+            return (date, isDone, entry)
+        }
+        return entries.map { ($0, key($0)) }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
     }
 }

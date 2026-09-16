@@ -230,10 +230,53 @@ final class HookWatcherTests: XCTestCase {
         XCTAssertEqual(entries, ["\(id).xyz.stop", "notify.sh"].sorted())
     }
 
-    func testUnknownEventFallsBackToDoneMarker() throws {
+    func testInputWithoutEventNameFallsBackToDoneMarker() throws {
+        // Manual/legacy invocation: something on stdin but no hook_event_name.
         let id = UUID().uuidString
         try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: "not json at all")
         XCTAssertTrue(FileManager.default.fileExists(atPath: markerPath(id)))
+    }
+
+    func testOtherNamedEventsWriteNothing() throws {
+        // A user routing Notification/PreToolUse to notify.sh must not fake a Stop.
+        for event in ["Notification", "PreToolUse", "UserPromptSubmit"] {
+            let id = UUID().uuidString
+            let status = try runNotifyScript(
+                environment: [HookWatcher.instanceIDEnvironmentVariable: id],
+                stdin: "{\"hook_event_name\":\"\(event)\"}"
+            )
+            XCTAssertEqual(status, 0)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)), "\(event) must not write .done")
+        }
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertEqual(entries, ["notify.sh"])
+    }
+
+    func testEmptyPipedStdinWritesNothing() throws {
+        // bash 3.2 discards partial input on read timeout; an empty read must not become a Stop.
+        let id = UUID().uuidString
+        let status = try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: "")
+        XCTAssertEqual(status, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id)))
+    }
+
+    func testDeliveryOrderIsChronologicalWithDoneLast() throws {
+        let id = UUID().uuidString
+        let fm = FileManager.default
+        let base = Date(timeIntervalSinceNow: -60)
+        func write(_ name: String, at offset: TimeInterval) throws {
+            let path = tempDir.appendingPathComponent(name).path
+            fm.createFile(atPath: path, contents: Data())
+            try fm.setAttributes([.modificationDate: base.addingTimeInterval(offset)], ofItemAtPath: path)
+        }
+        // Filename order would be: .done, .aaa.start, .zzz.start, .zzz.stop -- none of which is what happened.
+        try write("\(id).zzz.start", at: 0)
+        try write("\(id).zzz.stop", at: 1)
+        try write("\(id).aaa.start", at: 2)
+        try write("\(id).done", at: 2)   // same instant as aaa.start: done must come after it
+
+        let ordered = HookWatcher.deliveryOrder(try fm.contentsOfDirectory(atPath: tempDir.path), in: tempDir)
+        XCTAssertEqual(ordered, ["\(id).zzz.start", "\(id).zzz.stop", "\(id).aaa.start", "\(id).done"])
     }
 
     // MARK: HookMarker parsing

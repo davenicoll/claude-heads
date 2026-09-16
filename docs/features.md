@@ -35,6 +35,7 @@ This describes what the app does today. Anything not listed here is not implemen
 - The head waves when Claude goes quiet after at least 5 seconds of continuous output (a task finishing), and when the process exits
 - Clicking the waving head dismisses the wave and opens the terminal
 - With the Claude Code `Stop` hook configured (see the README Hook Setup section), `HookWatcher` picks up the `<uuid>.done` marker and the head goes idle and waves immediately, overriding the output-idle heuristic
+- With the `SubagentStart`/`SubagentStop` hooks configured, `HookWatcher` also picks up `<uuid>.<agent_id>.start`/`.stop` markers and each running subagent is drawn as a small head orbiting its parent (coloured by agent type, hover for the type); they disappear when the subagent stops or the parent's Stop fires
 
 ## Settings
 

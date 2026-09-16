@@ -12,23 +12,27 @@ import SwiftUI
 /// and its orbiting children are not claimed by this view, and the transparent panel
 /// area lets the click fall through to whatever is underneath.
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
-    /// Returns true when a point (in this view's coordinates) is on a visible, clickable
-    /// part of the head. When nil, the whole view is hittable.
+    /// Returns true when a point (in *window* coordinates, y up) is on a visible,
+    /// clickable part of the head. When nil, the whole view is hittable.
+    ///
+    /// NSHostingView is flipped (y down), so the region is always evaluated in window
+    /// space: that is the frame `DraggablePanel.mouseDown` (`event.locationInWindow`)
+    /// and `OrbitLayout` use, so both AppKit hit paths agree.
     var hitRegion: ((NSPoint) -> Bool)?
 
-    /// The rect (in this view's coordinates) that should show the arrow cursor.
+    /// The rect (in *window* coordinates) that should show the arrow cursor.
     var cursorRect: NSRect?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func resetCursorRects() {
-        addCursorRect(cursorRect ?? bounds, cursor: .arrow)
+        addCursorRect(cursorRect.map { convert($0, from: nil) } ?? bounds, cursor: .arrow)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
         guard bounds.contains(local) else { return nil }
-        if let hitRegion, !hitRegion(local) { return nil }
+        if let hitRegion, !hitRegion(convert(local, to: nil)) { return nil }
         return self
     }
 
@@ -187,6 +191,7 @@ final class HeadWindowController {
         panel.setFrameOrigin(panelOrigin(forHeadPosition: head.position))
 
         // Hit-testing: only the parent head (circle + label) and the orbiting children.
+        // Both closures receive window-local (y up) points.
         hostingView.hitRegion = { [weak self] point in
             self?.isHittable(point) ?? true
         }

@@ -15,7 +15,7 @@ Heads are only created for sessions started from the app; it does not discover `
 - Magnetic snap: drop a head near another and it snaps edge-to-edge
 - Multi-monitor aware with position memory across launches
 - Wave animation when Claude goes idle after working
-- Subagent orbit: with the `SubagentStart`/`SubagentStop` hooks configured, each Claude Code subagent appears as a small head (coloured by agent type, hover for the name) orbiting its parent until it finishes
+- Subagent orbit: with the `SubagentStart`/`SubagentStop` hooks configured, each Claude Code subagent appears as a small head (coloured by agent type, hover for the agent type) orbiting its parent until it finishes
 - Configurable terminal font, head size, snap distance, and default CLI flags/arguments
 - Menu bar app (no dock icon)
 

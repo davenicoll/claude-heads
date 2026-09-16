@@ -169,11 +169,19 @@ struct SubagentOrbitView: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: children.isEmpty)) { context in
+            // Children sit at fixed phase-0 offsets and the whole ring is rotated once per
+            // frame; each child counter-rotates so its face and caption stay upright. Only
+            // transforms change per tick, so no child body (gradient, shadow, text) is
+            // rebuilt or re-rasterised while the ring turns.
+            //
+            // OrbitLayout angles grow counter-clockwise in y-up space; SwiftUI's
+            // rotationEffect is clockwise on screen, hence the negated ring angle.
             let phase = OrbitLayout.phase(at: context.date)
             ZStack {
                 ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                    let o = layout.offset(index: index, count: children.count, phase: phase)
+                    let o = layout.offset(index: index, count: children.count, phase: 0)
                     SubagentHeadView(child: child, diameter: layout.childDiameter, isHovered: hoveredID == child.id)
+                        .rotationEffect(.radians(phase))
                         .offset(x: o.dx, y: -o.dy)
                         .onHover { inside in
                             if inside {
@@ -185,6 +193,7 @@ struct SubagentOrbitView: View {
                         .transition(.scale(scale: 0.2).combined(with: .opacity))
                 }
             }
+            .rotationEffect(.radians(-phase))
         }
         .animation(.spring(duration: 0.35), value: childIDs)
         .allowsHitTesting(!children.isEmpty)
