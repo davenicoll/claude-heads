@@ -379,23 +379,32 @@ final class ConstantsTests: XCTestCase {
             "Hooks directory should be named 'hooks'"
         )
     }
+}
 
-    func testHeadSizeConstants() {
-        XCTAssertEqual(Constants.headSizeSmall, 40)
-        XCTAssertEqual(Constants.headSizeMedium, 60)
-        XCTAssertEqual(Constants.headSizeLarge, 80)
+// MARK: - HeadGeometry Tests
+
+final class HeadGeometryTests: XCTestCase {
+
+    func testWindowSizeIncludesEmojiOverhangAndLabel() {
+        let g = HeadGeometry(diameter: 60)
+        XCTAssertEqual(g.emojiSize, 60 * HeadGeometry.emojiScale, accuracy: 0.001)
+        XCTAssertEqual(g.totalWidth, 60 + g.emojiSize, accuracy: 0.001)
+        XCTAssertEqual(g.stackHeight, 60 + g.emojiSize * HeadGeometry.emojiOverhang, accuracy: 0.001)
+        XCTAssertEqual(g.totalHeight, g.stackHeight + HeadGeometry.labelHeight, accuracy: 0.001)
+        XCTAssertEqual(g.windowSize.width, g.totalWidth, accuracy: 0.001)
+        XCTAssertEqual(g.windowSize.height, g.totalHeight, accuracy: 0.001)
     }
 
-    func testDefaultSnapDistance() {
-        XCTAssertEqual(Constants.defaultSnapDistance, 60)
+    func testCircleIsCentredHorizontallyAndSitsAboveLabel() {
+        let g = HeadGeometry(diameter: 80)
+        XCTAssertEqual(g.circleOffsetX * 2 + g.diameter, g.totalWidth, accuracy: 0.001)
+        XCTAssertEqual(g.circleBottomY, HeadGeometry.labelHeight + HeadGeometry.labelSpacing, accuracy: 0.001)
+        XCTAssertEqual(g.circleTopY, g.circleBottomY + 80, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(g.circleTopY, g.totalHeight, "Circle must fit inside the window")
     }
 
-    func testAnimationDurations() {
-        XCTAssertGreaterThan(Constants.waveAnimationDuration, 0)
-        XCTAssertGreaterThan(Constants.springAnimationDuration, 0)
-        XCTAssertGreaterThan(Constants.expandAnimationDuration, 0)
-        XCTAssertGreaterThan(Constants.collapseAnimationDuration, 0)
-        XCTAssertGreaterThan(Constants.snapAnimationDuration, 0)
+    func testCurrentUsesSettingsDiameter() {
+        XCTAssertEqual(HeadGeometry.current.diameter, AppSettings.shared.headSize.diameter)
     }
 }
 
@@ -448,43 +457,6 @@ final class AppSettingsTests: XCTestCase {
             HeadSize.allCases.contains(settings.headSize),
             "Head size should be a valid case"
         )
-    }
-}
-
-// MARK: - HeadPosition Tests
-
-final class HeadPositionTests: XCTestCase {
-
-    func testDefaultInit() {
-        let pos = HeadPosition()
-        XCTAssertEqual(pos.point, .zero)
-        XCTAssertEqual(pos.screenID, 0)
-    }
-
-    func testCustomInit() {
-        let pos = HeadPosition(point: CGPoint(x: 100, y: 200), screenID: 42)
-        XCTAssertEqual(pos.point.x, 100)
-        XCTAssertEqual(pos.point.y, 200)
-        XCTAssertEqual(pos.screenID, 42)
-    }
-
-    func testEquatable() {
-        let a = HeadPosition(point: CGPoint(x: 10, y: 20), screenID: 1)
-        let b = HeadPosition(point: CGPoint(x: 10, y: 20), screenID: 1)
-        let c = HeadPosition(point: CGPoint(x: 30, y: 40), screenID: 2)
-
-        XCTAssertEqual(a, b)
-        XCTAssertNotEqual(a, c)
-    }
-
-    func testCodableRoundTrip() throws {
-        let original = HeadPosition(point: CGPoint(x: 123.5, y: 456.7), screenID: 99)
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(HeadPosition.self, from: data)
-
-        XCTAssertEqual(decoded.point.x, original.point.x, accuracy: 0.001)
-        XCTAssertEqual(decoded.point.y, original.point.y, accuracy: 0.001)
-        XCTAssertEqual(decoded.screenID, original.screenID)
     }
 }
 

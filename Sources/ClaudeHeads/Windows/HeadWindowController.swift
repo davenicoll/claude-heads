@@ -61,26 +61,24 @@ final class DraggablePanel: NSPanel {
             y: windowOriginAtDragStart.y + dy
         )
 
-        // Clamp so the circle stays on screen. The window includes emoji padding
-        // and a label, but only the circle needs to stay visible.
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(current) }) ?? NSScreen.main {
-            let sf = screen.visibleFrame
-            let d = AppSettings.shared.headSize.diameter
-            let emojiPad = d * 0.52
-            let totalSize = d + emojiPad
-            let labelH: CGFloat = 14
-            let circleOffX = (totalSize - d) / 2  // circle X offset within window
-
-            // Circle is at the bottom of the ZStack (which is above the label)
-            let circleBottomY = labelH + 2  // VStack spacing=2
-            let circleTopY = circleBottomY + d
-
-            newOrigin.x = max(sf.minX - circleOffX, min(newOrigin.x, sf.maxX - circleOffX - d))
-            newOrigin.y = max(sf.minY - circleBottomY, min(newOrigin.y, sf.maxY - circleTopY))
-        }
+        newOrigin = clampedToScreen(newOrigin, near: current)
 
         onDragMoved?(newOrigin)
         setFrameOrigin(newOrigin)
+    }
+
+    /// Clamps a window origin so the head's circle stays fully inside the visible
+    /// frame of the screen containing `point` (or this panel's screen). The window
+    /// includes emoji padding and a label, but only the circle needs to stay visible.
+    func clampedToScreen(_ origin: CGPoint, near point: CGPoint? = nil) -> CGPoint {
+        let screen = point.flatMap { p in NSScreen.screens.first(where: { $0.frame.contains(p) }) }
+            ?? self.screen ?? NSScreen.main
+        guard let sf = screen?.visibleFrame else { return origin }
+        let g = HeadGeometry.current
+        var clamped = origin
+        clamped.x = max(sf.minX - g.circleOffsetX, min(clamped.x, sf.maxX - g.circleOffsetX - g.diameter))
+        clamped.y = max(sf.minY - g.circleBottomY, min(clamped.y, sf.maxY - g.circleTopY))
+        return clamped
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -103,12 +101,7 @@ final class HeadWindowController {
         self.head = head
         self.appState = appState
 
-        let diameter = AppSettings.shared.headSize.diameter
-        let emojiSize = diameter * 0.52
-        let totalSize = diameter + emojiSize
-        let zstackHeight = diameter + emojiSize * 0.6
-        let labelHeight: CGFloat = 14
-        let contentRect = NSRect(x: 0, y: 0, width: totalSize, height: zstackHeight + labelHeight)
+        let contentRect = NSRect(origin: .zero, size: HeadGeometry.current.windowSize)
 
         panel = DraggablePanel(
             contentRect: contentRect,
@@ -149,7 +142,13 @@ final class HeadWindowController {
 
         panel.onDragEnded = { [weak self] finalOrigin in
             guard let self else { return }
-            self.head.position = CGPoint(x: finalOrigin.x, y: finalOrigin.y)
+            // Snap first, then re-clamp: SnapEngine knows nothing about screen bounds.
+            let snapped = self.panel.clampedToScreen(self.snappedOrigin(for: finalOrigin))
+            self.head.position = snapped
+            if snapped != finalOrigin {
+                self.panel.setFrameOrigin(snapped)
+            }
+            self.updateSnapGroups()
             if let screen = self.panel.screen {
                 let key = NSDeviceDescriptionKey("NSScreenNumber")
                 if let screenID = screen.deviceDescription[key] as? UInt32 {
@@ -177,14 +176,56 @@ final class HeadWindowController {
         panel.setFrameOrigin(NSPoint(x: head.position.x, y: head.position.y))
     }
 
+    // MARK: - Snapping
+
+    private let snapEngine = SnapEngine()
+
+    /// Returns where the head should land after a drag: magnetically snapped to a
+    /// neighbouring head's edge if one is within the configured snap distance,
+    /// otherwise the proposed origin unchanged.
+    ///
+    /// Head origins all share the same window geometry, so snapping origins
+    /// `diameter` apart puts the circles exactly edge-to-edge horizontally. When
+    /// snapping vertically the gap is widened by the label strip so the upper
+    /// head's name label is not drawn over the lower head's circle.
+    private func snappedOrigin(for proposed: CGPoint) -> CGPoint {
+        guard let appState else { return proposed }
+        let diameter = AppSettings.shared.headSize.diameter
+        var snapped = snapEngine.snapPosition(
+            for: head.id,
+            proposedPosition: proposed,
+            allHeads: appState.heads,
+            headSize: diameter,
+            snapDistance: AppSettings.shared.snapDistance
+        )
+
+        if snapped.y != proposed.y {
+            let labelStrip = HeadGeometry.labelHeight + HeadGeometry.labelSpacing
+            snapped.y += (snapped.y > proposed.y ? 1 : -1) * labelStrip
+        }
+
+        // Never snap directly on top of another head (both axes centre-aligned).
+        let overlapsOther = appState.heads.contains { other in
+            other.id != head.id
+                && abs(other.position.x - snapped.x) < 1
+                && abs(other.position.y - snapped.y) < 1
+        }
+        return overlapsOther ? proposed : snapped
+    }
+
+    /// Recomputes `snapGroupID` for every head so that touching heads share a group.
+    private func updateSnapGroups() {
+        guard let appState else { return }
+        snapEngine.updateSnapGroups(
+            &appState.heads,
+            headSize: AppSettings.shared.headSize.diameter,
+            snapDistance: AppSettings.shared.snapDistance
+        )
+    }
+
     /// Resize the panel and hosting view to match the current head size setting.
     func resizeToFit() {
-        let diameter = AppSettings.shared.headSize.diameter
-        let emojiSize = diameter * 0.52
-        let totalSize = diameter + emojiSize
-        let zstackHeight = diameter + emojiSize * 0.6
-        let labelHeight: CGFloat = 14
-        let newSize = NSSize(width: totalSize, height: zstackHeight + labelHeight)
+        let newSize = HeadGeometry.current.windowSize
 
         var frame = panel.frame
         // Keep the center position stable

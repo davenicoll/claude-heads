@@ -22,7 +22,7 @@ enum AvatarGenerator {
             context.clip()
 
             // -- Gradient background --
-            let (color1, color2) = gradientNSColors(for: folderPath)
+            let (color1, color2) = PathColorGenerator.gradientNSColors(for: folderPath)
             let gradient = NSGradient(starting: color1, ending: color2)
             gradient?.draw(in: drawRect, angle: -45)
 
@@ -75,58 +75,5 @@ enum AvatarGenerator {
 
         // Fallback: first two characters
         return String(trimmed.prefix(2)).uppercased()
-    }
-
-    /// Produce two NSColors for the gradient from a path.
-    private static func gradientNSColors(for path: String) -> (NSColor, NSColor) {
-        let swiftGradient = PathColorGenerator.gradient(for: path)
-
-        // Resolve gradient colors by re-deriving from the same hash logic
-        // (avoids trying to inspect the opaque SwiftUI gradient).
-        let hash = fnvHash(path)
-        let hue = Double(hash & 0xFFFF) / Double(0xFFFF)
-        let saturation = 0.5 + Double((hash >> 16) & 0xFFFF) / Double(0xFFFF) * 0.2
-        let lightness = 0.4 + Double((hash >> 32) & 0xFFFF) / Double(0xFFFF) * 0.15
-
-        let hueShift: Double = 0.07
-        let hue2 = (hue + hueShift).truncatingRemainder(dividingBy: 1.0)
-        let lightness2 = max(0.30, lightness - 0.08)
-
-        let c1 = nsColorFromHSL(hue: hue, saturation: saturation, lightness: lightness)
-        let c2 = nsColorFromHSL(hue: hue2, saturation: saturation, lightness: lightness2)
-        return (c1, c2)
-    }
-
-    private static func fnvHash(_ string: String) -> UInt64 {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in string.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return hash
-    }
-
-    private static func nsColorFromHSL(hue: Double, saturation: Double, lightness: Double) -> NSColor {
-        let brightness: Double
-        let sbSaturation: Double
-
-        if lightness <= 0.5 {
-            brightness = lightness * (1 + saturation)
-        } else {
-            brightness = lightness + saturation - lightness * saturation
-        }
-
-        if brightness == 0 {
-            sbSaturation = 0
-        } else {
-            sbSaturation = 2.0 * (1.0 - lightness / brightness)
-        }
-
-        return NSColor(
-            hue: max(0, min(1, hue)),
-            saturation: max(0, min(1, sbSaturation)),
-            brightness: max(0, min(1, brightness)),
-            alpha: 1.0
-        )
     }
 }

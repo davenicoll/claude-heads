@@ -1,60 +1,56 @@
-# Claude Heads - Implementation Plan
+# Claude Heads - Implementation Notes
 
-## Phase 1: Project Skeleton & Floating Heads
+This is a description of how the shipped code is put together, organised by area. It replaces the original phased plan; where a planned item was not built, that is stated.
 
-**Goal:** Get circular floating heads visible on screen that can be dragged around.
+## Build
 
-1. Create Swift Package / Xcode project with SwiftUI lifecycle
-2. Set up `NSPanel`-based floating window (non-activating, always-on-top, transparent)
-3. Implement `HeadView` — circular SwiftUI view with name label and generated background color
-4. Implement `PathColorGenerator` — deterministic HSL color from a folder path hash
-5. Implement drag-to-reposition via `NSPanel` mouse event handling
-6. Persist head positions to disk; restore on launch
-7. Multi-monitor awareness: listen for screen config changes, remap positions
+- Swift Package Manager only. `Package.swift` declares three targets plus tests:
+  - `CPTYHelpers` (C): `pty_set_window_size(fd, rows, cols)` wrapping the `TIOCSWINSZ` ioctl, which is not callable from Swift directly
+  - `ClaudeHeadsCore` (library, `Sources/ClaudeHeads`): everything except `@main`
+  - `ClaudeHeads` (executable, `Sources/ClaudeHeadsApp`): the `App` struct with the `MenuBarExtra`
+  - `ClaudeHeadsCoreTests` (XCTest)
+- Minimum deployment target macOS 14. There is no Xcode project, code signing setup, or DMG pipeline.
 
-## Phase 2: Process Management & Terminal
+## Floating Heads
 
-**Goal:** Each head spawns and manages a real `claude` CLI process with terminal I/O.
+- `HeadWindowController` creates a `DraggablePanel` (borderless, non-activating `NSPanel` at `.floating` level) sized from `HeadGeometry.current.windowSize`.
+- `PassthroughHostingView` (an `NSHostingView` subclass) forwards `mouseDown`/`mouseDragged`/`mouseUp` to the panel and accepts first mouse, so the SwiftUI content never swallows events.
+- `DraggablePanel` distinguishes click from drag with a 3pt threshold. During a drag it clamps the origin so the circle stays within the screen's `visibleFrame`, calls `onDragMoved` (which moves the terminal along), and on release calls `onDragEnded`.
+- `onDragEnded` runs `SnapEngine.snapPosition` against `AppState.heads`, moves the panel if a snap applied, runs `SnapEngine.updateSnapGroups`, records the screen ID, and saves state.
+- `HeadGeometry` (in `Constants.swift`) is the single source of the layout numbers: emoji scale 0.52, emoji overhang 0.6, label height 14, label spacing 2. `HeadView`, the panel sizing/clamping, and `TerminalWindowController.fullHeadRect()` all use it.
+- `HeadView` draws the gradient (or avatar image), an ASCII face from `HeadFace`/`FaceSequencer` ticked every 2s, an optional status dot, the wave emoji when `isWaving`, and the name label.
+- `PathColorGenerator` hashes the folder path with FNV-1a and maps it to an HSL gradient; it exposes both SwiftUI `Color`s and `NSColor`s from the same maths. `AvatarGenerator` uses the `NSColor` variant to render an initials image, but nothing in the app calls it yet.
 
-1. Add SwiftTerm as a Swift Package dependency
-2. Implement `ProcessManager` — forks a PTY, execs `claude` with configurable args and working directory
-3. Implement `TerminalEmulator` bridge — feed PTY bytes into SwiftTerm's `Terminal`, expose the terminal view
-4. Implement `TerminalPopover` — click a head to show/hide a terminal panel anchored to the head
-5. Forward keyboard input from the terminal view back to the PTY
-6. Implement pin behavior — toggle that keeps the terminal panel open and floating
+## Process Management and Terminal
 
-## Phase 3: Hook Integration & Wave Animation
+- `ProcessManager.spawnProcess` uses `forkpty()`. The child `chdir`s into the project folder, sets `PATH` to include `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin` and a default nvm path (GUI apps do not inherit the shell PATH), sets `TERM=xterm-256color`, resolves `claude` from those locations, and `execvp`s. With `--continue` enabled it runs `claude --continue ... || claude ...` through `/bin/sh -c`.
+- The parent puts the master fd in non-blocking mode and reads it from a `DispatchSourceRead`; bytes are fed to the SwiftTerm `TerminalView` on the main queue and `onProcessActivity(pid)` fires.
+- Exits are caught two ways: EOF/error on the PTY, and a `SIGCHLD` dispatch source that reaps with `waitpid(-1, WNOHANG)`. Both funnel into `cleanUp`, which cancels the read source (closing the fd) and fires `onProcessExit` on the main queue.
+- `TerminalBridge` implements `TerminalViewDelegate`: writes keystrokes to the master fd, propagates size changes via `pty_set_window_size` + `SIGWINCH`, opens links, copies to the clipboard, beeps on bell.
+- `TerminalWindowController` owns a `FloatingTerminalPanel` (titled, closable, resizable, non-activating, `.floating`). `showWindow` ensures the process is running, positions the panel near the head avoiding obstacles, and makes the terminal view first responder. Close hides the panel rather than destroying it.
+- Pinning: `windowDidResignKey` closes the panel unless `head.isPinned` or the new key window is another `FloatingTerminalPanel`. A pin/unpin `NSButton` is installed as a trailing `NSTitlebarAccessoryViewController`; toggling it flips `isPinned` and saves state.
 
-**Goal:** Detect task completion and animate the head.
+## State Machine and Wave
 
-1. Create the hook script that writes a marker file on task completion
-2. Implement `HookWatcher` — file system watcher on the markers directory
-3. Design the wave animation (hand emoji overlay with spring animation on the head)
-4. Wire up: marker detected → head state = `.finished` → wave animation plays
-5. Click on waving head → dismiss animation, open terminal
+- `AppState.handleProcessActivity`: on output, cancel any wave, set `.running` (recording the start time), and (re)arm a 2s idle timer. When the timer fires the head becomes `.idle`; if it had been running for at least 5s it waves for 2s. This filters out status-line blips.
+- `AppState.handleProcessExit`: set `.finished`, wave, close the terminal, remove the head after 10s.
+- `AppState.hookWatcher` (`HookWatcher`) watches `~/.claude-heads/hooks` for `<uuid>.done` markers written by `notify.sh` from the Claude Code `Stop` hook. `handleHookTaskComplete` cancels the heuristic idle timer, sets `.idle`, and waves; output arriving within a 1s grace window afterwards (Claude's prompt redraw) is ignored so the indicator does not flicker.
 
-## Phase 4: Snap Behavior
+## Persistence
 
-**Goal:** Heads magnetically snap together and move as groups.
+- `HeadInstance` is `Codable`; `AppState.saveState()` writes the array to `~/.claude-heads/state.json`, and `restoreHeads()` reads it back on launch and re-spawns each session. `processID` is runtime-only and not encoded.
+- `AppSettings` is a singleton persisted as JSON in `UserDefaults` under `com.claudeheads.appSettings`. It still carries a `launchAtLogin` flag from an earlier design; nothing reads it and the Settings UI no longer shows it. Launch at login is not implemented.
+- `PositionManager` also contains an older `SavedHead` save/load path; only its `remapPositions` and screen-change notification are used.
 
-1. Implement `SnapEngine` — distance checks during drag, magnetic pull
-2. Group management — track which heads are snapped together
-3. Group dragging — moving one snapped head moves the cluster
-4. Detach gesture — fast flick or drag beyond threshold separates a head
+## Settings and Menu Bar
 
-## Phase 5: Settings & Polish
+- `SettingsView` is a SwiftUI `Form` shown in an `NSWindow` at `.floating` level: head size, snap distance, status indicator, terminal font/size (posting `.terminalFontChanged` / `.headSizeChanged` notifications that `AppState` applies live), and the Claude Code flags.
+- `ClaudeHeadsApp` is a `MenuBarExtra` with a button per head (bring to front), "New Head..." (Cmd-N, `NSOpenPanel`), "Settings..." (Cmd-,), and "Quit" (Cmd-Q, which calls `AppState.shutdown()` first).
+- `AppDelegate` sets the `.accessory` activation policy (no Dock icon) and creates `~/.claude-heads/hooks`.
 
-**Goal:** User-facing configuration and app polish.
+## Not built
 
-1. Implement `SettingsView` — terminal font, head size, snap distance, default CLI args, launch at login
-2. Implement `NewInstanceView` — directory picker, optional CLI args, optional avatar
-3. Custom avatar support — image picker, stored per instance
-4. Menu bar icon with dropdown: list of heads, new instance, settings, quit
-5. App icon and About window
-6. Error handling: process crash recovery, permission prompts for accessibility if needed
-
-## Build & Distribution
-
-- Xcode project, minimum deployment target macOS 14 (Sonoma)
-- Code-sign with Developer ID for distribution outside the App Store
-- DMG or direct .app distribution via GitHub Releases
+- Group dragging / detach gesture (`SnapEngine.moveGroup` exists, unused)
+- Launch at login, system notifications, badge counts
+- Custom avatar picker (the former `NewInstanceView` dialog was removed in favour of the folder picker)
+- Xcode project, signing, distribution packaging
