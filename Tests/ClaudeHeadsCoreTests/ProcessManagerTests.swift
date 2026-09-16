@@ -163,8 +163,10 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertFalse(manager.isProcessRunning(pid: pid))
         // The child is already reaped: waitpid must not find it.
         var status: Int32 = 0
-        XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1)
-        XCTAssertEqual(errno, ECHILD)
+        let rc = waitpid(pid, &status, WNOHANG)
+        let err = errno
+        XCTAssertEqual(rc, -1)
+        XCTAssertEqual(err, ECHILD)
     }
 
     func testExecFailureReportsExitCode127() {
@@ -242,8 +244,10 @@ final class ProcessManagerTests: XCTestCase {
 
         for pid in [pid1, pid2] {
             var status: Int32 = 0
-            XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1, "pid \(pid) must already be reaped")
-            XCTAssertEqual(errno, ECHILD)
+            let rc = waitpid(pid, &status, WNOHANG)
+            let err = errno
+            XCTAssertEqual(rc, -1, "pid \(pid) must already be reaped")
+            XCTAssertEqual(err, ECHILD)
             XCTAssertNotEqual(kill(pid, 0), 0, "pid \(pid) must be gone")
         }
 
@@ -338,8 +342,10 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertTrue(session.isReaped)
 
         var status: Int32 = 0
-        XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1, "Child must already be reaped (no zombie)")
-        XCTAssertEqual(errno, ECHILD)
+        let rc = waitpid(pid, &status, WNOHANG)
+        let err = errno
+        XCTAssertEqual(rc, -1, "Child must already be reaped (no zombie)")
+        XCTAssertEqual(err, ECHILD)
     }
 
     func testWriteAfterExitIsIgnored() throws {
@@ -351,12 +357,22 @@ final class ProcessManagerTests: XCTestCase {
         let session = try XCTUnwrap(manager.session(for: pid))
         wait(for: [exited], timeout: 5.0)
 
-        // Must not crash or touch the closed fd.
+        XCTAssertTrue(session.isClosed)
+
+        // Open a pipe after the master fd was closed: the kernel hands out the lowest free
+        // descriptor, so one end very likely reuses the session's old fd number. A write that
+        // escaped the isClosed guard would land in this pipe and become readable below.
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(pipe(&fds), 0)
+        defer { close(fds[0]); close(fds[1]) }
+
         session.write(Array("late\n".utf8))
         session.resize(cols: 100, rows: 40)
         let settle = expectation(description: "settle")
         session.queue.async { settle.fulfill() }
         wait(for: [settle], timeout: 2.0)
-        XCTAssertTrue(session.isClosed)
+
+        var pfd = pollfd(fd: fds[0], events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(poll(&pfd, 1, 0), 0, "Nothing may be written to a descriptor reusing the closed fd")
     }
 }

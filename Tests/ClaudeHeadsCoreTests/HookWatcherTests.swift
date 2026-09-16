@@ -140,6 +140,7 @@ final class HookWatcherTests: XCTestCase {
         try "#!/bin/sh\necho stale\n".write(to: stale, atomically: true, encoding: .utf8)
 
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
 
         XCTAssertEqual(watcher.hookScriptPath(), stale.path)
         let contents = try String(contentsOf: stale, encoding: .utf8)
@@ -151,6 +152,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testMarkerFileTriggersOnTaskComplete() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onTaskComplete called")
@@ -173,6 +175,7 @@ final class HookWatcherTests: XCTestCase {
         FileManager.default.createFile(atPath: markerPath(staleID.uuidString), contents: nil)
 
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
 
         let notCalled = expectation(description: "stale marker must not be delivered")
         notCalled.isInverted = true
@@ -185,6 +188,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testNonUUIDMarkersAreIgnoredButCleanedUp() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
 
         let notCalled = expectation(description: "non-UUID marker must not be delivered")
         notCalled.isInverted = true
@@ -202,6 +206,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testEachMarkerIsDeliveredExactlyOnce() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let ids = [UUID(), UUID(), UUID()]
 
         let received = expectation(description: "three markers delivered")

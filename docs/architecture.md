@@ -64,11 +64,11 @@ Each head also owns a `FloatingTerminalPanel` (`NSPanel`, `[.titled, .closable, 
 
 1. The user picks "New Head..." in the menu bar; `AppState.showNewHeadDialog()` shows an `NSOpenPanel` for a folder.
 2. `AppState.addHead` creates a `HeadInstance`, a `TerminalView` + `TerminalBridge`, and a `TerminalWindowController`, then calls `ProcessManager.spawnProcess`.
-3. `ProcessManager` calls `forkpty()`. In the child it `chdir`s to the folder, sets `PATH`/`TERM`, resolves the `claude` binary from a few well-known locations, and `execvp`s it with the flags from `AppSettings.effectiveCLIArgs` plus per-head extra args. If `--continue` is enabled it runs `claude --continue ... || claude ...` via `/bin/sh` so a missing session falls back to a fresh one.
+3. `ProcessManager.spawnProcess` does all the Swift work in the parent: it builds the child environment (`PATH`, `TERM`, `CLAUDE_INSTANCE_ID`), resolves the `claude` binary on that `PATH`, and builds argv via `buildArguments` from `AppSettings.effectiveCLIArgs` (split shell-style by `ShellWords`) plus per-head extra args, dropping `--continue` when `hasResumableSession` finds no `~/.claude/projects/<sanitized-folder>/*.jsonl`. It then calls `forkpty()`; the child branch only uses async-signal-safe calls (`chdir`, `execve`, `write`, `_exit`) and exits 127 if `execve` fails.
 4. In the parent, a `DispatchSourceRead` on the PTY master feeds bytes to `TerminalView.feed` on the main queue and fires `onProcessActivity`.
 5. `AppState` maps activity to head state: any output marks the head `.running`; 2s of silence marks it `.idle`. If the running stretch lasted at least 5s, the head waves for 2s.
-6. Child exit is detected by EOF on the PTY or a `SIGCHLD` dispatch source (children are reaped with `waitpid`). The head becomes `.finished`, waves, its terminal closes, and the head is removed 10s later.
-7. On quit, `AppState.shutdown()` sends `SIGINT` to every child and saves state, then the app terminates immediately. The 3s `SIGKILL` escalation in `ProcessManager.killProcess` only applies to heads removed while the app is still running.
+6. Child exit is detected by EOF on the PTY master; the read source then closes the fd and reaps the child with `waitpid` on the session queue (exit code, or 128 + signal). The head becomes `.finished`, waves, its terminal closes, and the head is removed 10s later.
+7. On quit, `AppState.shutdown()` saves state and calls `ProcessManager.killAll`, which sends `SIGHUP` to every child process group, waits up to 2s, then `SIGKILL`s and reaps the rest before the app terminates. `killProcess` (used when a head is removed while the app is running) sends `SIGHUP` and escalates to `SIGKILL` after 2s.
 8. On launch, `AppState.restoreHeads()` reads `state.json` and re-spawns `claude` for every saved head.
 
 ## Hook Integration

@@ -183,8 +183,11 @@ enum ShellWords {
                 }
             case "\\":
                 inWord = true
-                if let next = iterator.next(), next != "\n" {
-                    current.append(next)
+                if let next = iterator.next() {
+                    if next != "\n" { current.append(next) }
+                } else {
+                    // A dangling trailing backslash is literal, matching /bin/sh.
+                    current.append("\\")
                 }
             case "'":
                 inWord = true

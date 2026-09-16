@@ -38,6 +38,12 @@ final class ShellWordsTests: XCTestCase {
         XCTAssertEqual(ShellWords.split("\"keep \\n literal\""), ["keep \\n literal"])
     }
 
+    func testTrailingBackslashIsLiteral() {
+        // /bin/sh: printf '[%s]' a \  -> [a] [\]
+        XCTAssertEqual(ShellWords.split("a \\"), ["a", "\\"])
+        XCTAssertEqual(ShellWords.split("a\\"), ["a\\"])
+    }
+
     func testUnterminatedQuoteRunsToEnd() {
         XCTAssertEqual(ShellWords.split("--prompt \"never closed"), ["--prompt", "never closed"])
     }
