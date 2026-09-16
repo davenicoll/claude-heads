@@ -23,9 +23,13 @@ final class SubagentInstanceLabelTests: XCTestCase {
         XCTAssertEqual(SubagentInstance(id: "abc", type: "  ").label, "abc", "short ids are not padded")
     }
 
-    func testLabelTrimsDescription() {
+    func testLabelTrimsDescriptionAndCollapsesWhitespace() {
         let child = SubagentInstance(id: "a1", type: "x", description: "  Run tests\n")
         XCTAssertEqual(child.label, "Run tests")
+        // The caption is one line; interior newlines and tabs must not cut it short.
+        let multiline = SubagentInstance(id: "a1", type: "x", description: "Run\n\tall   the\ntests")
+        XCTAssertEqual(multiline.label, "Run all the tests")
+        XCTAssertEqual(multiline.tooltip, "Run all the tests\nType: x")
     }
 
     func testLabelTruncatesLongDescriptionWithEllipsis() {
@@ -73,14 +77,17 @@ final class SubagentInstanceLabelTests: XCTestCase {
         XCTAssertEqual(idOnly.tooltip, "af7589e5")
     }
 
-    func testColorKeyDerivesFromTypeAndFallsBackToLabel() {
+    func testColorKeyDerivesFromTypeAndFallsBackToStableID() {
         let a = SubagentInstance(id: "a1", type: "Explore", description: "Find tests")
         let b = SubagentInstance(id: "b2", type: "explore", description: "Something else")
         XCTAssertEqual(a.colorKey, b.colorKey, "same kind, same colour regardless of description or case")
 
-        let noType = SubagentInstance(id: "c3", type: "", description: "Find tests")
-        XCTAssertEqual(noType.colorKey, "subagent:find tests")
-        XCTAssertEqual(SubagentInstance(id: "af7589e59f71169d7", type: "").colorKey, "subagent:af7589e5")
+        // Without a type the colour keys on the id, so a description arriving later does not flip it.
+        var noType = SubagentInstance(id: "C3", type: "")
+        let before = noType.colorKey
+        noType.description = "Find tests"
+        XCTAssertEqual(noType.colorKey, before)
+        XCTAssertEqual(noType.colorKey, "subagent:c3")
     }
 }
 
@@ -128,9 +135,23 @@ final class SubagentInstanceMergeTests: XCTestCase {
         let merged = SubagentInstance.merging(children, with: [
             task("tksfpzdbj", type: "teammate", description: "Run sleep", agentType: nil),
             task("done1", status: "completed"),
+            task("failed1", status: "failed"),
+            task("killed1", status: "Killed"),
+            task("cancelled1", status: "cancelled"),
             task("", description: "no id"),
         ])
-        XCTAssertEqual(merged, children, "no positive evidence of a new subagent")
+        XCTAssertEqual(merged, children, "no positive evidence of a new live subagent")
+    }
+
+    func testMergeTreatsUnknownStatusesAsAlive() {
+        let merged = SubagentInstance.merging([], with: [
+            task("p", status: "pending"),
+            task("q", status: "queued"),
+            task("blank", status: ""),
+        ])
+        XCTAssertEqual(merged.map(\.id), ["p", "q", "blank"])
+        XCTAssertTrue(task("x", status: "pending").isAlive)
+        XCTAssertFalse(task("x", status: "completed").isAlive)
     }
 
     func testMergeNeverRemovesChildren() {
@@ -155,9 +176,9 @@ final class SubagentInstanceMergeTests: XCTestCase {
         XCTAssertEqual(merged, children)
     }
 
-    func testStopReconcileKeepsListedRunningChildrenAndDropsTheRest() {
+    func testStopReconcileRemovesOnlyChildrenListedAsFinished() {
         let children = [
-            SubagentInstance(id: "a1", type: "Explore"),
+            SubagentInstance(id: "apayload-probe-9ce8", type: "payload-probe"),   // teammate: listed under another id
             SubagentInstance(id: "b2", type: ""),
             SubagentInstance(id: "c3", type: "Plan"),
         ]
@@ -165,11 +186,12 @@ final class SubagentInstanceMergeTests: XCTestCase {
             task("b2", description: "Settings height", agentType: "general-purpose"),
             task("c3", status: "completed"),
             task("d4", description: "New one"),
-            task("tm", type: "teammate", agentType: nil),
+            task("tksfpzdbj", type: "teammate", agentType: nil),
         ])
-        XCTAssertEqual(reconciled.map(\.id), ["b2", "d4"], "unlisted a1 and finished c3 go; running d4 is added")
-        XCTAssertEqual(reconciled[0].type, "general-purpose")
-        XCTAssertEqual(reconciled[0].description, "Settings height")
+        XCTAssertEqual(reconciled.map(\.id), ["apayload-probe-9ce8", "b2", "d4"],
+                       "finished c3 goes; unlisted teammate stays; running d4 is added; order kept")
+        XCTAssertEqual(reconciled[1].type, "general-purpose")
+        XCTAssertEqual(reconciled[1].description, "Settings height")
     }
 
     func testStopReconcileWithoutListKeepsEveryChild() {
@@ -177,8 +199,16 @@ final class SubagentInstanceMergeTests: XCTestCase {
         XCTAssertEqual(SubagentInstance.reconciling(children, withStopTasks: nil), children)
     }
 
-    func testStopReconcileWithEmptyListClearsChildren() {
+    func testStopReconcileWithEmptyListKeepsEveryChild() {
+        // An empty list is not evidence that anything finished: teammates are never listed
+        // under their SubagentStart id, so they would otherwise vanish at every turn end.
         let children = [SubagentInstance(id: "a1", type: "Explore")]
-        XCTAssertEqual(SubagentInstance.reconciling(children, withStopTasks: []), [])
+        XCTAssertEqual(SubagentInstance.reconciling(children, withStopTasks: []), children)
+    }
+
+    func testStopReconcileKeepsListedPendingChildren() {
+        let children = [SubagentInstance(id: "a1", type: "Explore")]
+        let reconciled = SubagentInstance.reconciling(children, withStopTasks: [task("a1", status: "pending", agentType: "Explore")])
+        XCTAssertEqual(reconciled, children)
     }
 }

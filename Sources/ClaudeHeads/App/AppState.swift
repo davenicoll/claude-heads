@@ -14,7 +14,8 @@ public final class AppState {
     let settings = AppSettings.shared
     let processManager = ProcessManager.shared
     let positionManager = PositionManager.shared
-    /// Watches ~/.claude-heads/hooks for `.done` markers written by the Claude Code Stop hook.
+    /// Watches ~/.claude-heads/hooks for the `.done`/`.start`/`.stop` markers (each holding
+    /// the raw hook payload) written by the Claude Code Stop/SubagentStart/SubagentStop hooks.
     let hookWatcher = HookWatcher()
     /// Installs the hooks that write those markers into ~/.claude/settings.json while the
     /// app runs. Created after `hookWatcher` so notify.sh exists before it is referenced.
@@ -325,8 +326,8 @@ public final class AppState {
         hookIdleAt[headID] = Date()
         // Stop fires at the end of every assistant turn, and background subagents keep
         // running across turns, so the ring is reconciled against the payload's
-        // background_tasks rather than cleared. Without that list nothing is removed;
-        // each child then leaves on its own SubagentStop (or when the process exits).
+        // background_tasks rather than cleared: only a child the list reports as finished
+        // is removed. Otherwise each child leaves on its own SubagentStop (or process exit).
         let reconciled = SubagentInstance.reconciling(head.children, withStopTasks: backgroundTasks)
         if reconciled != head.children {
             head.children = reconciled

@@ -58,6 +58,8 @@ enum HookMarker: Equatable {
 /// root or missing fields all yield an `.empty` payload and the filename alone drives
 /// the event.
 struct HookPayload: Equatable {
+    /// The raw `agent_id`, preferred over the filename's sanitised copy when present.
+    var agentID: String?
     /// `agent_type` (may legitimately be empty in Claude Code 2.1.x payloads).
     var agentType: String = ""
     /// A top-level `description`, if a future payload carries one.
@@ -74,6 +76,9 @@ struct HookPayload: Equatable {
         }
 
         var payload = HookPayload()
+        if let agentID = root["agent_id"] as? String, !agentID.isEmpty {
+            payload.agentID = agentID
+        }
         payload.agentType = (root["agent_type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let description = root["description"] as? String {
             payload.description = description
@@ -102,11 +107,14 @@ struct HookPayload: Equatable {
 /// Watches for Claude Code hook signals by monitoring a hooks directory for marker
 /// files written by a shell script hook, and fans them out as typed events:
 ///
-/// - `<uuid>.done`           -> `onTaskComplete(uuid)`                          (Stop)
+/// - `<uuid>.done`           -> `onTaskComplete(uuid, backgroundTasks?)`           (Stop)
 /// - `<uuid>.<agent>.start`  -> `onSubagentStart(uuid, agent, type, description)` (SubagentStart)
 /// - `<uuid>.<agent>.stop`   -> `onSubagentStop(uuid, agent)`                    (SubagentStop)
 /// - any marker whose payload has `background_tasks` -> `onBackgroundTasks(uuid, tasks)`,
 ///   delivered just before the marker's own event.
+///
+/// The agent id comes from the payload's `agent_id` when it parses (so it matches the
+/// ids in `background_tasks` exactly) and from the sanitised filename otherwise.
 ///
 /// This is the single source of truth for `notify.sh`: the script is rewritten on
 /// every launch so stale versions are always replaced.
@@ -221,20 +229,23 @@ final class HookWatcher {
         fi
     fi
 
-    # Extract a top-level string field from the JSON with sed only (no jq/python needed).
-    # Good enough for routing (hook_event_name, agent_id); the app parses the full JSON.
+    # Extract a string field from the JSON with grep/sed only (no jq/python needed). The
+    # FIRST occurrence wins: Claude Code puts the top-level keys before nested arrays such
+    # as background_tasks, whose entries repeat key names. Good enough for routing
+    # (hook_event_name, agent_id); the app parses the full JSON.
     json_field() {
         printf '%s\\n' "${INPUT}" \\
-            | sed -nE 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"([^"]*)".*/\\1/p' \\
-            | sed -n '1p'
+            | grep -oE '"'"$1"'"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null \\
+            | sed -nE '1s/.*:[[:space:]]*"([^"]*)"$/\\1/p'
     }
 
     EVENT="$(json_field hook_event_name)"
 
     # Writes the raw payload into "$1" atomically (temp file + rename) so the watcher never
     # reads a partial file. printf is a builtin, so payload size is not limited by ARG_MAX.
+    # The temp name carries this shell's pid so concurrent hooks never share one.
     write_marker() {
-        TMP="$1.tmp"
+        TMP="$1.$$.tmp"
         if printf '%s' "${INPUT}" > "${TMP}" 2>/dev/null; then
             mv -f "${TMP}" "$1" 2>/dev/null || rm -f "${TMP}" 2>/dev/null
         fi
@@ -386,10 +397,10 @@ final class HookWatcher {
         switch marker {
         case .taskComplete:
             onTaskComplete?(instance, payload.backgroundTasks)
-        case .subagentStart(_, let agentID):
-            onSubagentStart?(instance, agentID, payload.agentType, payload.description)
-        case .subagentStop(_, let agentID):
-            onSubagentStop?(instance, agentID)
+        case .subagentStart(_, let filenameID):
+            onSubagentStart?(instance, payload.agentID ?? filenameID, payload.agentType, payload.description)
+        case .subagentStop(_, let filenameID):
+            onSubagentStop?(instance, payload.agentID ?? filenameID)
         }
     }
 

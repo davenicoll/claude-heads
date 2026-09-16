@@ -230,7 +230,27 @@ final class HookWatcherTests: XCTestCase {
 
         XCTAssertEqual(status, 0)
         let path = subagentMarkerPath(id, agent: "big1", suffix: "stop")
-        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8).count, json.count)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), json)
+    }
+
+    func testRoutingUsesTheFirstOccurrenceOfAKey() throws {
+        // Nested arrays (session_crons, background_tasks) repeat key names; a later nested
+        // "agent_id" or "hook_event_name" must not hijack the filename or the event.
+        let id = UUID().uuidString
+        let nestedAgentID = """
+        {"hook_event_name":"SubagentStop","agent_id":"real1","session_crons":[{"agent_id":"cronX"}]}
+        """
+        try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id], stdin: nestedAgentID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: subagentMarkerPath(id, agent: "real1", suffix: "stop")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: subagentMarkerPath(id, agent: "cronX", suffix: "stop")))
+
+        let id2 = UUID().uuidString
+        let nestedEvent = """
+        {"hook_event_name":"SubagentStop","agent_id":"a1","background_tasks":[{"id":"t","hook_event_name":"Stop","status":"running"}]}
+        """
+        try runNotifyScript(environment: [HookWatcher.instanceIDEnvironmentVariable: id2], stdin: nestedEvent)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: subagentMarkerPath(id2, agent: "a1", suffix: "stop")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(id2)), "a nested Stop must not fake the parent's Stop")
     }
 
     func testNoTempFilesAreLeftBehind() throws {
@@ -348,7 +368,8 @@ final class HookWatcherTests: XCTestCase {
     // MARK: HookPayload parsing
 
     func testPayloadParsesAgentTypeAndTrims() {
-        let payload = HookPayload.parse(Data("{\"agent_id\":\"a1\",\"agent_type\":\" Explore \"}".utf8))
+        let payload = HookPayload.parse(Data("{\"agent_id\":\"a.1\",\"agent_type\":\" Explore \"}".utf8))
+        XCTAssertEqual(payload.agentID, "a.1", "raw id, not the filename-sanitised one")
         XCTAssertEqual(payload.agentType, "Explore")
         XCTAssertNil(payload.description)
         XCTAssertNil(payload.backgroundTasks, "no background_tasks key means nil, not an empty list")
@@ -399,6 +420,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testStartMarkerTriggersOnSubagentStartWithType() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onSubagentStart called")
@@ -407,27 +429,51 @@ final class HookWatcherTests: XCTestCase {
             got = (instance, agentID, type, description)
             received.fulfill()
         }
-        let notDone = expectation(description: "onTaskComplete must not fire for a start marker")
-        notDone.isInverted = true
-        watcher.onTaskComplete = { _, _ in notDone.fulfill() }
-        let noTasks = expectation(description: "onBackgroundTasks must not fire without the key")
-        noTasks.isInverted = true
-        watcher.onBackgroundTasks = { _, _ in noTasks.fulfill() }
+        // Every callback for one marker is delivered in the same main-queue block, so by
+        // the time onSubagentStart has run these would already have fired if they were going to.
+        var doneFired = false
+        var tasksFired = false
+        watcher.onTaskComplete = { _, _ in doneFired = true }
+        watcher.onBackgroundTasks = { _, _ in tasksFired = true }
 
         let path = subagentMarkerPath(id.uuidString, agent: "agent-1", suffix: "start")
         try "{\"hook_event_name\":\"SubagentStart\",\"agent_id\":\"agent-1\",\"agent_type\":\"Explore\"}"
             .write(toFile: path, atomically: true, encoding: .utf8)
 
-        wait(for: [received, notDone, noTasks], timeout: 5.0)
+        wait(for: [received], timeout: 5.0)
         XCTAssertEqual(got?.0, id)
         XCTAssertEqual(got?.1, "agent-1")
         XCTAssertEqual(got?.2, "Explore")
         XCTAssertNil(got?.3)
+        XCTAssertFalse(doneFired, "onTaskComplete must not fire for a start marker")
+        XCTAssertFalse(tasksFired, "onBackgroundTasks must not fire without the key")
         XCTAssertFalse(FileManager.default.fileExists(atPath: path), "Marker should be removed after delivery")
+    }
+
+    func testStartMarkerPrefersRawAgentIDFromPayload() throws {
+        let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
+        let id = UUID()
+
+        let received = expectation(description: "onSubagentStart called")
+        var agentID: String?
+        watcher.onSubagentStart = { _, got, _, _ in
+            agentID = got
+            received.fulfill()
+        }
+
+        // notify.sh sanitises "a.b" to "ab" for the filename; the payload keeps the raw id.
+        let path = subagentMarkerPath(id.uuidString, agent: "ab", suffix: "start")
+        try "{\"hook_event_name\":\"SubagentStart\",\"agent_id\":\"a.b\",\"agent_type\":\"Explore\"}"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+
+        wait(for: [received], timeout: 5.0)
+        XCTAssertEqual(agentID, "a.b")
     }
 
     func testStartMarkerWithEmptyTypeDeliversEmptyType() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onSubagentStart called")
@@ -447,6 +493,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testStartMarkerWithMalformedContentFallsBackToFilename() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onSubagentStart called")
@@ -466,6 +513,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testStopMarkerTriggersOnSubagentStop() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onSubagentStop called")
@@ -484,6 +532,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testStopMarkerWithBackgroundTasksDeliversTasksBeforeStop() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let stop = expectation(description: "onSubagentStop called")
@@ -513,6 +562,7 @@ final class HookWatcherTests: XCTestCase {
 
     func testDoneMarkerPassesBackgroundTasksToOnTaskComplete() throws {
         let watcher = HookWatcher(hooksDirectory: tempDir)
+        defer { withExtendedLifetime(watcher) {} }
         let id = UUID()
 
         let received = expectation(description: "onTaskComplete called")

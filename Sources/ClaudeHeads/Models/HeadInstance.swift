@@ -35,7 +35,12 @@ public struct BackgroundTask: Hashable, Sendable {
         self.agentType = agentType
     }
 
-    public var isRunning: Bool { status == "running" }
+    /// Statuses that mean the task is over. Anything else (`running`, `pending`, an
+    /// unknown future value, or no status at all) counts as alive.
+    public static let terminalStatuses: Set<String> = ["completed", "failed", "killed", "cancelled"]
+
+    public var isTerminal: Bool { Self.terminalStatuses.contains(status.lowercased()) }
+    public var isAlive: Bool { !isTerminal }
     public var isSubagent: Bool { type == "subagent" }
 }
 
@@ -63,11 +68,12 @@ public struct SubagentInstance: Identifiable, Hashable, Sendable {
     /// Longest caption shown on the orbiting head before it is cut with an ellipsis.
     public static let labelLimit = 24
 
-    /// The trimmed description, or nil when there is none worth showing.
+    /// The description with whitespace runs (including newlines) collapsed to single
+    /// spaces and trimmed, or nil when there is none worth showing.
     public var trimmedDescription: String? {
         guard let description else { return nil }
-        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        let collapsed = description.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return collapsed.isEmpty ? nil : collapsed
     }
 
     private var trimmedType: String { type.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -98,9 +104,9 @@ public struct SubagentInstance: Identifiable, Hashable, Sendable {
     }
 
     /// Seed for the head's colour: the agent type when known (so every agent of one kind
-    /// shares a colour), otherwise the label.
+    /// shares a colour), otherwise the agent id, which unlike the label never changes.
     public var colorKey: String {
-        "subagent:" + (trimmedType.isEmpty ? label : trimmedType).lowercased()
+        "subagent:" + (trimmedType.isEmpty ? id : trimmedType).lowercased()
     }
 
     /// Cuts `text` to at most `limit` characters (grapheme clusters), replacing the tail
@@ -115,7 +121,7 @@ public struct SubagentInstance: Identifiable, Hashable, Sendable {
     /// Merges a `background_tasks` list into a head's children, preserving their order.
     ///
     /// Existing children matched by id pick up a non-empty `agent_type` and description;
-    /// running `subagent` entries not yet known are appended (e.g. started before the app
+    /// alive `subagent` entries not yet known are appended (e.g. started before the app
     /// launched, or whose start marker was lost). Nothing is removed: on its own the list
     /// is only positive evidence, and teammate entries do not share ids with subagent
     /// events. Returns `children` unchanged (same array) when there is nothing to apply.
@@ -138,7 +144,7 @@ public struct SubagentInstance: Identifiable, Hashable, Sendable {
                     result[index].description = description
                     changed = true
                 }
-            } else if task.isSubagent, task.isRunning {
+            } else if task.isSubagent, task.isAlive {
                 result.append(SubagentInstance(
                     id: task.id,
                     type: type,
@@ -153,17 +159,19 @@ public struct SubagentInstance: Identifiable, Hashable, Sendable {
     /// Reconciles a head's children when the parent's `Stop` hook fires.
     ///
     /// Stop fires at the end of every assistant turn while background agents keep running
-    /// across turns, so it must not clear the ring. With a `background_tasks` list the
-    /// list is authoritative: listed running entries are merged in (see `merging`) and
-    /// every child not listed as running is removed. Without a list (`nil`) nothing
-    /// changes; children then only leave on their own `SubagentStop`.
+    /// across turns, so it must not clear the ring. With a `background_tasks` list, alive
+    /// entries are merged in (see `merging`) and a child is removed only on positive
+    /// evidence: an entry with its id whose status is terminal. Unlisted children are
+    /// kept (a teammate's `SubagentStart` agent_id does not match its task id), and leave
+    /// on their own `SubagentStop`. Without a list (`nil`) nothing changes.
     public static func reconciling(
         _ children: [SubagentInstance],
         withStopTasks tasks: [BackgroundTask]?
     ) -> [SubagentInstance] {
         guard let tasks else { return children }
-        let running = Set(tasks.filter(\.isRunning).map(\.id))
-        return merging(children, with: tasks).filter { running.contains($0.id) }
+        let finished = Set(tasks.filter(\.isTerminal).map(\.id))
+        let merged = merging(children, with: tasks)
+        return finished.isEmpty ? merged : merged.filter { !finished.contains($0.id) }
     }
 }
 
