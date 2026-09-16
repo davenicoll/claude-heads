@@ -25,7 +25,11 @@ final class PTYSession {
 
     fileprivate var readSource: DispatchSourceRead?
 
-    init(pid: pid_t, masterFD: Int32, terminalView: TerminalView) {
+    /// Longest a single write will wait for the child to drain the PTY input buffer before
+    /// giving up, so a stopped child can never wedge the session queue (and thus `killAll`).
+    static let writeTimeout: TimeInterval = 1.0
+
+    init(pid: pid_t, masterFD: Int32, terminalView: TerminalView?) {
         self.pid = pid
         self.masterFD = masterFD
         self.terminalView = terminalView
@@ -58,21 +62,27 @@ final class PTYSession {
     // MARK: I/O (serialized on `queue`)
 
     /// Writes user input to the child. Safe to call from any thread.
+    ///
+    /// The write is bounded: it re-checks `isClosed` on every retry and abandons the input
+    /// after `writeTimeout` of the child not reading, so it can never block the queue forever.
     func write(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         queue.async { [self] in
             guard !isClosed else { return }
+            let deadline = Date().addingTimeInterval(Self.writeTimeout)
             bytes.withUnsafeBufferPointer { buffer in
                 guard let base = buffer.baseAddress else { return }
                 var total = 0
                 while total < bytes.count {
+                    if isClosed { return }
                     let written = Darwin.write(masterFD, base.advanced(by: total), bytes.count - total)
                     if written < 0 {
                         if errno == EINTR { continue }
                         if errno == EAGAIN {
+                            if Date() >= deadline { return }
                             // Non-blocking fd is full; wait briefly for the child to drain it.
                             var pfd = pollfd(fd: masterFD, events: Int16(POLLOUT), revents: 0)
-                            _ = poll(&pfd, 1, 100)
+                            _ = poll(&pfd, 1, 50)
                             continue
                         }
                         return
@@ -99,6 +109,11 @@ final class PTYSession {
 final class ProcessManager {
     static let shared = ProcessManager()
 
+    /// Exit code reported when the child could not `chdir` into the project folder.
+    static let exitCodeChdirFailed: Int32 = 126
+    /// Exit code reported when `execve` failed (the executable could not be started).
+    static let exitCodeExecFailed: Int32 = 127
+
     /// Active sessions keyed by child PID.
     private var sessions: [pid_t: PTYSession] = [:]
     private let lock = NSLock()
@@ -121,7 +136,8 @@ final class ProcessManager {
         ]
     }()
 
-    private init() {}
+    /// `init` is internal (not private) so tests can use an isolated instance.
+    init() {}
 
     // MARK: - Spawn
 
@@ -129,7 +145,7 @@ final class ProcessManager {
     ///
     /// Everything that needs Swift runtime support (argument/environment construction,
     /// settings, path lookup) happens in the parent before `forkpty`. The child branch only
-    /// calls async-signal-safe functions (`chdir`, `execve`, `_exit`).
+    /// calls async-signal-safe functions (`chdir`, `execve`, `write`, `_exit`).
     ///
     /// - Returns: The child PID, or -1 on failure.
     @discardableResult
@@ -143,7 +159,11 @@ final class ProcessManager {
         let searchPath = environment["PATH"] ?? ""
 
         guard let claudeBin = Self.resolveExecutable("claude", searchPath: searchPath) else {
-            fputs("claude-heads: could not find `claude` in PATH (\(searchPath))\n", stderr)
+            let message = "claude-heads: could not find `claude` in PATH.\r\n"
+                + "Searched: \(searchPath)\r\n"
+                + "Install Claude Code (https://claude.ai/code) or add it to your PATH, then restart the head.\r\n"
+            fputs(message, stderr)
+            terminalView.feed(text: message)
             return -1
         }
 
@@ -153,36 +173,77 @@ final class ProcessManager {
             settingsArgs: AppSettings.shared.effectiveCLIArgs,
             extraArgs: head.extraArgs
         )
+
+        return spawn(
+            executable: claudeBin,
+            arguments: argv,
+            environment: environment,
+            cwd: folderPath,
+            terminalView: terminalView,
+            bridge: bridge
+        )
+    }
+
+    /// Forks a child attached to a new PTY and execs `executable` with the given argv/env.
+    ///
+    /// `arguments` must include argv[0]. This is the seam used by `spawnProcess` and by tests;
+    /// the terminal view and bridge are optional so children can be driven headlessly.
+    ///
+    /// - Returns: The child PID, or -1 on failure.
+    @discardableResult
+    func spawn(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        cwd: String,
+        terminalView: TerminalView?,
+        bridge: TerminalBridge?
+    ) -> pid_t {
         let envp = environment.map { "\($0.key)=\($0.value)" }.sorted()
 
-        // Build NULL-terminated C arrays now so the child does not allocate.
-        let cArgv = CStringArray(argv)
+        // Build every C buffer the child needs *before* forking so the child never allocates.
+        let cArgv = CStringArray(arguments)
         let cEnvp = CStringArray(envp)
-        let cPath = strdup(claudeBin)
-        let cCwd = strdup(folderPath)
-        defer {
-            free(cPath)
-            free(cCwd)
-        }
+        let cPath = CStringArray([executable])
+        let cCwd = CStringArray([cwd])
+        let cChdirError = CStringArray(["claude-heads: cannot change to directory \(cwd)\r\n"])
+        let cExecError = CStringArray(["claude-heads: failed to start \(executable)\r\n"])
 
         var winSize = Self.initialWindowSize(for: terminalView)
         var masterFD: Int32 = 0
-        let childPID = forkpty(&masterFD, nil, nil, &winSize)
 
-        guard childPID >= 0 else {
-            perror("forkpty")
-            return -1
+        // Hoist every pointer the child will touch into locals and pin the owning objects for
+        // the whole fork/exec sequence. Without `withExtendedLifetime`, ARC is free to release
+        // the arrays right after the last pointer load, which would run `free()` in the child.
+        let childPID: pid_t = withExtendedLifetime((cArgv, cEnvp, cPath, cCwd, cChdirError, cExecError)) {
+            let argvPtr = cArgv.pointer
+            let envpPtr = cEnvp.pointer
+            let pathPtr = cPath.pointer[0]!
+            let cwdPtr = cCwd.pointer[0]!
+            let chdirErrPtr = cChdirError.pointer[0]!
+            let chdirErrLen = strlen(chdirErrPtr)
+            let execErrPtr = cExecError.pointer[0]!
+            let execErrLen = strlen(execErrPtr)
+
+            let pid = forkpty(&masterFD, nil, nil, &winSize)
+
+            if pid == 0 {
+                // ---- Child process: async-signal-safe calls only ----
+                if chdir(cwdPtr) != 0 {
+                    _ = Darwin.write(STDERR_FILENO, chdirErrPtr, chdirErrLen)
+                    _exit(Self.exitCodeChdirFailed)
+                }
+                execve(pathPtr, argvPtr, envpPtr)
+                _ = Darwin.write(STDERR_FILENO, execErrPtr, execErrLen)
+                _exit(Self.exitCodeExecFailed)
+            }
+            return pid
         }
 
-        if childPID == 0 {
-            // ---- Child process: async-signal-safe calls only ----
-            if let cwd = cCwd, chdir(cwd) != 0 {
-                _exit(126)
-            }
-            if let path = cPath {
-                execve(path, cArgv.pointer, cEnvp.pointer)
-            }
-            _exit(127)
+        guard childPID > 0 else {
+            perror("forkpty")
+            terminalView?.feed(text: "claude-heads: forkpty failed (\(String(cString: strerror(errno))))\r\n")
+            return -1
         }
 
         // ---- Parent process ----
@@ -194,7 +255,7 @@ final class ProcessManager {
         }
 
         let session = PTYSession(pid: childPID, masterFD: masterFD, terminalView: terminalView)
-        bridge.session = session
+        bridge?.session = session
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: session.queue)
         readSource.setEventHandler { [weak self, weak session] in
@@ -222,16 +283,17 @@ final class ProcessManager {
 
         var buffer = [UInt8](repeating: 0, count: 16384)
         var sawEOF = false
+        let pid = session.pid
 
-        // Drain everything currently available.
+        // Drain everything currently available. Output is always forwarded to the view, even
+        // when EOF follows in the same pass: feeding the view never touches the fd, and the
+        // child's final bytes must not be lost just because the session closed afterwards.
         while true {
             let n = read(session.masterFD, &buffer, buffer.count)
             if n > 0 {
                 let data = Array(buffer[0..<n])
-                let pid = session.pid
-                DispatchQueue.main.async { [weak self, weak session] in
-                    guard let session, !session.isClosed, let view = session.terminalView else { return }
-                    view.feed(byteArray: ArraySlice(data))
+                DispatchQueue.main.async { [weak self, weak view = session.terminalView] in
+                    view?.feed(byteArray: ArraySlice(data))
                     self?.onProcessActivity?(pid)
                 }
                 continue
@@ -296,8 +358,7 @@ final class ProcessManager {
             usleep(10_000)
         }
 
-        kill(-session.pid, SIGKILL)
-        kill(session.pid, SIGKILL)
+        Self.signalGroup(pid: session.pid, SIGKILL)
         while waitpid(session.pid, &status, 0) < 0 && errno == EINTR {}
         session.markReaped()
         return Self.decodeExitStatus(status)
@@ -337,7 +398,7 @@ final class ProcessManager {
     /// Synchronously terminates every active process. Sends SIGHUP to each process group, waits
     /// up to `timeout` seconds for them to exit, then SIGKILLs and reaps whatever is left.
     /// Returns only once every child has been reaped, so it is safe to call right before
-    /// `NSApplication.terminate`.
+    /// `NSApplication.terminate`. Idempotent: calling it with no sessions is a no-op.
     func killAll(timeout: TimeInterval = 2.0) {
         lock.lock()
         let all = Array(sessions.values)
@@ -346,12 +407,12 @@ final class ProcessManager {
 
         guard !all.isEmpty else { return }
 
-        // Stop all I/O first so nothing writes to or reads from the fds while we tear down.
-        for session in all {
-            session.queue.sync {
-                if session.markClosed() {
-                    session.readSource?.cancel()
-                }
+        // Mark every session closed *without* waiting on its queue: a pending write loop or an
+        // in-flight reap must not be able to extend the shutdown deadline. Pending I/O blocks
+        // observe `isClosed` and bail out; the cancel handler closes the fd once they have.
+        for session in all where session.markClosed() {
+            session.queue.async { [session] in
+                session.readSource?.cancel()
             }
         }
 
@@ -434,9 +495,12 @@ final class ProcessManager {
     }
 
     /// Claude Code stores sessions under `~/.claude/projects/<sanitized path>/*.jsonl`, where every
-    /// non-alphanumeric character in the absolute project path is replaced with `-`.
+    /// character outside `[a-zA-Z0-9]` in the absolute project path is replaced with `-`.
+    /// The check is ASCII-only on purpose to match Claude Code's regex exactly.
     static func sessionDirectory(for folderPath: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-        let sanitized = String(folderPath.map { $0.isLetter || $0.isNumber ? $0 : "-" })
+        let sanitized = String(folderPath.map { ch -> Character in
+            ch.isASCII && (ch.isLetter || ch.isNumber) ? ch : "-"
+        })
         return home
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("projects", isDirectory: true)
@@ -496,20 +560,22 @@ final class ProcessManager {
 
     /// Uses the terminal's current grid if the view has laid out; otherwise derives the grid from
     /// the view's frame and cell metrics so claude does not start at 80x24 and then get resized.
-    private static func initialWindowSize(for terminalView: TerminalView) -> winsize {
+    private static func initialWindowSize(for terminalView: TerminalView?) -> winsize {
         var ws = winsize()
         var cols = 0
         var rows = 0
 
-        // Force any pending Auto Layout so SwiftTerm has computed cols/rows for its real frame
-        // (TerminalWindowController lays the view out at the panel's configured size).
-        terminalView.superview?.layoutSubtreeIfNeeded()
+        if let terminalView {
+            // Force any pending Auto Layout so SwiftTerm has computed cols/rows for its real frame
+            // (TerminalWindowController lays the view out at the panel's configured size).
+            terminalView.superview?.layoutSubtreeIfNeeded()
 
-        let bounds = terminalView.bounds
-        if bounds.width > 0, bounds.height > 0 {
-            let terminal = terminalView.getTerminal()
-            cols = terminal.cols
-            rows = terminal.rows
+            let bounds = terminalView.bounds
+            if bounds.width > 0, bounds.height > 0 {
+                let terminal = terminalView.getTerminal()
+                cols = terminal.cols
+                rows = terminal.rows
+            }
         }
 
         if cols <= 0 || rows <= 0 {

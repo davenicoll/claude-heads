@@ -43,10 +43,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        // AppState handles saving positions and killing processes via shutdown(),
-        // but we guard against it not being called by the menu-bar quit path.
-        // The @main App's ClaudeHeadsApp already calls appState.shutdown()
-        // before NSApplication.shared.terminate, so this is a safety net.
+        // AppState observes NSApplication.willTerminateNotification and runs shutdown()
+        // (save state, synchronously stop every claude child) on every quit path, so nothing
+        // else is needed here.
     }
 
     // MARK: - Directory Setup

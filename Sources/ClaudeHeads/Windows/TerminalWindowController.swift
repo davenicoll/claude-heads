@@ -75,7 +75,6 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
         // Lay out now so the terminal view already has its real size (and SwiftTerm its real
         // cols/rows) before the claude process is spawned, instead of starting at 80x24.
         container.layoutSubtreeIfNeeded()
->>>>>>> 33ed258 (fix(process): make PTY spawn fork-safe and process lifecycle deterministic)
 
         installPinButton()
     }

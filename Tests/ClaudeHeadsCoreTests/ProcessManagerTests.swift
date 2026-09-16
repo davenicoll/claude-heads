@@ -25,6 +25,12 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertTrue(dir.path.hasPrefix(tempHome.appendingPathComponent(".claude/projects").path))
     }
 
+    func testSessionDirectorySanitizationIsASCIIOnly() {
+        // Claude Code replaces everything outside [a-zA-Z0-9] with "-", including non-ASCII letters.
+        let dir = ProcessManager.sessionDirectory(for: "/Users/dave/caf\u{E9}/pr\u{F8}j3kt", home: tempHome)
+        XCTAssertEqual(dir.lastPathComponent, "-Users-dave-caf--pr-j3kt")
+    }
+
     func testHasResumableSessionOnlyWhenJSONLExists() throws {
         let folder = "/Users/test/project"
         XCTAssertFalse(ProcessManager.hasResumableSession(for: folder, home: tempHome))
@@ -109,5 +115,159 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertEqual(ProcessManager.decodeExitStatus(0), 0)
         XCTAssertEqual(ProcessManager.decodeExitStatus(3 << 8), 3)
         XCTAssertEqual(ProcessManager.decodeExitStatus(Int32(SIGKILL)), 128 + SIGKILL)
+    }
+
+    // MARK: Process lifecycle (real children via the spawn seam)
+
+    private func spawnShell(_ manager: ProcessManager, _ script: String) -> pid_t {
+        manager.spawn(
+            executable: "/bin/sh",
+            arguments: ["sh", "-c", script],
+            environment: ["PATH": "/usr/bin:/bin"],
+            cwd: "/",
+            terminalView: nil,
+            bridge: nil
+        )
+    }
+
+    func testEOFDrivenReapReportsRealExitCode() {
+        let manager = ProcessManager()
+        let exited = expectation(description: "onProcessExit")
+        var reported: (pid_t, Int32)?
+        manager.onProcessExit = { pid, code in
+            reported = (pid, code)
+            exited.fulfill()
+        }
+
+        let pid = spawnShell(manager, "exit 3")
+        XCTAssertGreaterThan(pid, 0)
+        XCTAssertTrue(manager.isProcessRunning(pid: pid) || reported != nil)
+
+        wait(for: [exited], timeout: 5.0)
+        XCTAssertEqual(reported?.0, pid)
+        XCTAssertEqual(reported?.1, 3)
+        XCTAssertNil(manager.session(for: pid), "Session must be removed once reaped")
+        XCTAssertFalse(manager.isProcessRunning(pid: pid))
+        // The child is already reaped: waitpid must not find it.
+        var status: Int32 = 0
+        XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1)
+        XCTAssertEqual(errno, ECHILD)
+    }
+
+    func testExecFailureReportsExitCode127() {
+        let manager = ProcessManager()
+        let exited = expectation(description: "onProcessExit")
+        var code: Int32?
+        manager.onProcessExit = { _, c in
+            code = c
+            exited.fulfill()
+        }
+
+        let pid = manager.spawn(
+            executable: "/nonexistent/binary-\(UUID().uuidString)",
+            arguments: ["x"],
+            environment: [:],
+            cwd: "/",
+            terminalView: nil,
+            bridge: nil
+        )
+        XCTAssertGreaterThan(pid, 0, "fork succeeds; only exec fails")
+        wait(for: [exited], timeout: 5.0)
+        XCTAssertEqual(code, ProcessManager.exitCodeExecFailed)
+    }
+
+    func testChdirFailureReportsExitCode126() {
+        let manager = ProcessManager()
+        let exited = expectation(description: "onProcessExit")
+        var code: Int32?
+        manager.onProcessExit = { _, c in
+            code = c
+            exited.fulfill()
+        }
+
+        let pid = manager.spawn(
+            executable: "/bin/sh",
+            arguments: ["sh", "-c", "exit 0"],
+            environment: [:],
+            cwd: tempHome.appendingPathComponent("does-not-exist").path,
+            terminalView: nil,
+            bridge: nil
+        )
+        XCTAssertGreaterThan(pid, 0)
+        wait(for: [exited], timeout: 5.0)
+        XCTAssertEqual(code, ProcessManager.exitCodeChdirFailed)
+    }
+
+    func testKillAllIsBoundedAndReapsChildren() {
+        let manager = ProcessManager()
+        var exitReported = false
+        manager.onProcessExit = { _, _ in exitReported = true }
+
+        // `trap '' HUP` makes the child ignore SIGHUP so killAll has to escalate to SIGKILL.
+        let pid1 = spawnShell(manager, "trap '' HUP; sleep 30")
+        let pid2 = manager.spawn(
+            executable: "/bin/sleep",
+            arguments: ["sleep", "30"],
+            environment: [:],
+            cwd: "/",
+            terminalView: nil,
+            bridge: nil
+        )
+        XCTAssertGreaterThan(pid1, 0)
+        XCTAssertGreaterThan(pid2, 0)
+        XCTAssertEqual(Set(manager.activePIDs), [pid1, pid2])
+
+        // Let the shells actually start and install the trap.
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let start = Date()
+        manager.killAll(timeout: 1.0)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertLessThan(elapsed, 2.5, "killAll must return within roughly the timeout")
+        XCTAssertTrue(manager.activePIDs.isEmpty)
+
+        for pid in [pid1, pid2] {
+            var status: Int32 = 0
+            XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1, "pid \(pid) must already be reaped")
+            XCTAssertEqual(errno, ECHILD)
+            XCTAssertNotEqual(kill(pid, 0), 0, "pid \(pid) must be gone")
+        }
+
+        // The read sources' EOF handlers may still fire; they must not report exits after killAll.
+        let settle = expectation(description: "settle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { settle.fulfill() }
+        wait(for: [settle], timeout: 2.0)
+        XCTAssertFalse(exitReported, "killAll owns the shutdown; no exit callbacks expected")
+    }
+
+    func testKillAllWithNoSessionsIsNoOp() {
+        let manager = ProcessManager()
+        let start = Date()
+        manager.killAll(timeout: 2.0)
+        manager.killAll(timeout: 2.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testChildReceivesArgumentsAndEnvironmentVerbatim() {
+        let manager = ProcessManager()
+        let outFile = tempHome.appendingPathComponent("out.txt").path
+        let exited = expectation(description: "onProcessExit")
+        manager.onProcessExit = { _, _ in exited.fulfill() }
+
+        let tricky = "say \"hi\" and it's $HOME fine"
+        let pid = manager.spawn(
+            executable: "/bin/sh",
+            arguments: ["sh", "-c", "printf '%s\\n%s\\n' \"$1\" \"$CLAUDE_INSTANCE_ID\" > \"$2\"", "sh", tricky, outFile],
+            environment: ["PATH": "/usr/bin:/bin", "CLAUDE_INSTANCE_ID": "ABC-123"],
+            cwd: "/",
+            terminalView: nil,
+            bridge: nil
+        )
+        XCTAssertGreaterThan(pid, 0)
+        wait(for: [exited], timeout: 5.0)
+
+        let output = try? String(contentsOfFile: outFile, encoding: .utf8)
+        XCTAssertEqual(output, "\(tricky)\nABC-123\n")
     }
 }

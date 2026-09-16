@@ -30,8 +30,19 @@ public final class AppState {
         }
 
         // Wire up process exit — show wave animation, then remove after delay
-        processManager.onProcessExit = { [weak self] pid, _ in
-            self?.handleProcessExit(pid: pid)
+        processManager.onProcessExit = { [weak self] pid, exitCode in
+            self?.handleProcessExit(pid: pid, exitCode: exitCode)
+        }
+
+        // Make sure every claude child is stopped and state is saved no matter how the app is
+        // asked to quit (Cmd-Q, logout, AppleScript, ...), not only via the menu-bar Quit button.
+        // shutdown() is idempotent so running it twice on the menu path is harmless.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.shutdown()
         }
 
         // Wire up PTY activity — mark head as running when output flows
@@ -313,14 +324,23 @@ public final class AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
     }
 
-    private func handleProcessExit(pid: pid_t) {
+    private func handleProcessExit(pid: pid_t, exitCode: Int32) {
         guard let head = heads.first(where: { $0.processID == pid }) else { return }
+
+        idleTimers[head.id]?.cancel()
+        idleTimers.removeValue(forKey: head.id)
+
+        // 126/127 mean claude never actually started (chdir or exec failed). Leave the head and
+        // its terminal in place, marked errored, so the diagnostic written to the PTY is visible.
+        if exitCode == ProcessManager.exitCodeChdirFailed || exitCode == ProcessManager.exitCodeExecFailed {
+            head.processID = nil
+            head.state = .errored
+            return
+        }
 
         // Show finished state with wave animation
         head.state = .finished
         head.isWaving = true
-        idleTimers[head.id]?.cancel()
-        idleTimers.removeValue(forKey: head.id)
 
         // Close the terminal window
         terminalControllers[head.id]?.close()
