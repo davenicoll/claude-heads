@@ -193,16 +193,27 @@ public final class AppState {
             return
         }
 
-        let settingsView = SettingsView()
-        let controller = NSHostingController(rootView: settingsView)
         // SettingsView fixes its width and sizes its height to the form's content, so the
         // whole form is visible without a scroll bar. The window takes that size up front
         // and follows it afterwards (e.g. when the hook status row wraps to two lines).
+        let controller = NSHostingController(rootView: SettingsView())
         controller.sizingOptions = [.preferredContentSize]
         let window = NSWindow(contentViewController: controller)
         window.title = "Claude Heads Settings"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(controller.view.fittingSize)
+        var size = controller.sizeThatFits(in: NSSize(width: SettingsView.width, height: .greatestFiniteMagnitude))
+        // On a display too short for the whole form, cap the height so the window stays on
+        // screen and hand the form that height so it scrolls instead of being clipped.
+        if let screen = NSScreen.main {
+            let titleBar = window.frame.height - window.contentLayoutRect.height
+            let available = screen.visibleFrame.height - titleBar
+            if size.height > available {
+                size.height = available
+                controller.sizingOptions = []
+                controller.rootView = SettingsView(fixedHeight: available)
+            }
+        }
+        window.setContentSize(size)
         window.center()
         window.level = .floating
         window.makeKeyAndOrderFront(nil)

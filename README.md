@@ -102,7 +102,7 @@ The Settings window shows the current state ("Installed", "Missing: SubagentStar
 
 ### Manual setup
 
-If you want the hooks in place without the app running (for example so a `claude` you start yourself is already covered when you later launch Claude Heads), add them yourself; the app leaves an entry that already invokes `notify.sh` alone and removes only entries pointing at that script on quit, so hand-written ones are treated exactly like its own. `~/.claude/settings.json` should contain `Stop`, `SubagentStart` and `SubagentStop` hooks all pointing at the same script:
+If the Settings window reports that the app could not update `settings.json` (for example because the file is not strict JSON), add the entries yourself. Note that the app removes any entry pointing at `notify.sh` on quit and re-adds its own on the next launch, so hand-written entries only need to last until the file is fixed. `~/.claude/settings.json` should contain `Stop`, `SubagentStart` and `SubagentStop` hooks all pointing at the same script:
 
 ```json
 {

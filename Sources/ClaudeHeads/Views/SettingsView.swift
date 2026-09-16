@@ -1,18 +1,32 @@
 import SwiftUI
 
 struct SettingsView: View {
+    static let width: CGFloat = 480
+
     private var settings = AppSettings.shared
     private var hookInstaller = HookInstaller.shared
     @State private var monoFonts: [String] = []
+
+    /// When nil the form sizes its height to its content (no scroll bar); when set, the
+    /// form is given exactly this height and scrolls, for displays too short for the whole form.
+    private let fixedHeight: CGFloat?
+
+    init(fixedHeight: CGFloat? = nil) {
+        self.fixedHeight = fixedHeight
+    }
 
     var body: some View {
         // Fixed width, but the height follows the content: a grouped Form is a scroll view,
         // so giving it a fixed height that is shorter than its rows shows a scroll bar.
         // `fixedSize` makes it report its ideal height (all sections fully laid out) and
         // `AppState.showSettings()` sizes the window to that.
-        form
-            .frame(width: 480)
-            .fixedSize(horizontal: false, vertical: true)
+        if let fixedHeight {
+            form.frame(width: Self.width, height: fixedHeight)
+        } else {
+            form
+                .frame(width: Self.width)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var form: some View {
