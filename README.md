@@ -41,19 +41,25 @@ cp .build/release/ClaudeHeads /usr/local/bin/
 
 ## Hook Setup
 
-To get wave-on-completion notifications, add this to your `~/.claude/settings.json` hooks:
+To get wave-on-completion notifications, add a `Stop` hook to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "stop",
-        "command": "~/.claude-heads/hooks/notify.sh $CLAUDE_INSTANCE_ID"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude-heads/hooks/notify.sh"
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-The app writes the hook script automatically on first launch.
+Claude Code runs the hook with the event JSON on stdin and no arguments. Claude Heads exports `CLAUDE_INSTANCE_ID` (the head's UUID) into each `claude` process it spawns, and `notify.sh` uses that to tell the app which head finished. When `CLAUDE_INSTANCE_ID` is not set (for example, a `claude` session you started yourself in a normal terminal) the script exits silently, so it is safe to leave the hook configured globally.
+
+The app (re)writes `~/.claude-heads/hooks/notify.sh` on every launch, so do not edit it by hand.

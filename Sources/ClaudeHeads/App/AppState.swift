@@ -14,6 +14,8 @@ public final class AppState {
     let settings = AppSettings.shared
     let processManager = ProcessManager.shared
     let positionManager = PositionManager.shared
+    /// Watches ~/.claude-heads/hooks for `.done` markers written by the Claude Code Stop hook.
+    let hookWatcher = HookWatcher()
 
     private var fontObservation: NSKeyValueObservation?
 
@@ -35,6 +37,11 @@ public final class AppState {
         // Wire up PTY activity — mark head as running when output flows
         processManager.onProcessActivity = { [weak self] pid in
             self?.handleProcessActivity(pid: pid)
+        }
+
+        // Wire up Claude Code hook events — the Stop hook writes a marker for the head's UUID
+        hookWatcher.onTaskComplete = { [weak self] headID in
+            self?.handleHookTaskComplete(headID: headID)
         }
 
         // Wire up font change notifications
@@ -113,6 +120,7 @@ public final class AppState {
             processManager.killProcess(pid: pid)
         }
         heads.removeAll { $0.id == id }
+        hookedHeads.remove(id)
         saveState()
     }
 
@@ -224,12 +232,45 @@ public final class AppState {
     private var runningStartTimes: [UUID: Date] = [:]
     /// Minimum sustained activity duration (seconds) before a wave is shown on idle
     private let minimumRunningDuration: TimeInterval = 5.0
+    /// Heads that have received at least one Claude Code hook event. For these, the
+    /// output-silence heuristic no longer triggers waves; the hook is authoritative.
+    private var hookedHeads: Set<UUID> = []
+
+    /// Show the wave on a head and auto-dismiss it after `duration` seconds.
+    private func triggerWave(for head: HeadInstance, dismissAfter duration: TimeInterval = 2.0) {
+        waveTimers[head.id]?.cancel()
+        head.isWaving = true
+        let dismiss = DispatchWorkItem { [weak self, headID = head.id] in
+            head.isWaving = false
+            self?.waveTimers.removeValue(forKey: headID)
+        }
+        waveTimers[head.id] = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: dismiss)
+    }
+
+    /// Called when the Claude Code Stop hook fires for a head (via HookWatcher).
+    private func handleHookTaskComplete(headID: UUID) {
+        guard let head = heads.first(where: { $0.id == headID }) else { return }
+        hookedHeads.insert(headID)
+
+        // The hook is authoritative: cancel any pending heuristic idle transition.
+        idleTimers[headID]?.cancel()
+        idleTimers.removeValue(forKey: headID)
+        runningStartTimes.removeValue(forKey: headID)
+
+        if head.state == .running {
+            head.state = .idle
+        }
+        triggerWave(for: head)
+    }
 
     private func handleProcessActivity(pid: pid_t) {
         guard let head = heads.first(where: { $0.processID == pid }) else { return }
 
-        // If we were waving, cancel — claude is working again
-        if head.isWaving {
+        // If we were waving, cancel — claude is working again. Skipped for hook-driven heads:
+        // Claude Code redraws its prompt right after the Stop hook fires, and that output
+        // must not cut the wave short; its dismiss timer handles it instead.
+        if head.isWaving, !hookedHeads.contains(head.id) {
             head.isWaving = false
             waveTimers[head.id]?.cancel()
             waveTimers.removeValue(forKey: head.id)
@@ -253,13 +294,10 @@ public final class AppState {
                 let duration = Date().timeIntervalSince(start)
                 self.runningStartTimes.removeValue(forKey: headID)
 
-                if duration >= self.minimumRunningDuration {
-                    head.isWaving = true
-                    let dismiss = DispatchWorkItem {
-                        head.isWaving = false
-                    }
-                    self.waveTimers[headID] = dismiss
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: dismiss)
+                // Fallback only: once a head has received a real hook event, the hook
+                // decides when to wave and the silence heuristic just tracks idle state.
+                if duration >= self.minimumRunningDuration, !self.hookedHeads.contains(headID) {
+                    self.triggerWave(for: head)
                 }
             }
         }
