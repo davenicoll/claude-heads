@@ -122,11 +122,20 @@ public final class AppState {
     }
 
     func removeHead(id: UUID) {
+        // Cancel any timers that reference this head so nothing fires after removal.
+        cancelPendingRemoval(for: id)
+        idleTimers.removeValue(forKey: id)?.cancel()
+        waveTimers.removeValue(forKey: id)?.cancel()
+        runningStartTimes.removeValue(forKey: id)
+
+        // Tear down the windows for real (close + drop the controllers) so the panels,
+        // hosting view and SwiftTerm view can deallocate. Panels use
+        // isReleasedWhenClosed = false, so dropping our references is what frees them.
         if let termController = terminalControllers.removeValue(forKey: id) {
-            termController.close()
+            termController.tearDown()
         }
         if let controller = headWindowControllers.removeValue(forKey: id) {
-            controller.close()
+            controller.tearDown()
         }
         if let head = heads.first(where: { $0.id == id }), let pid = head.processID {
             processManager.killProcess(pid: pid)
@@ -350,16 +359,22 @@ public final class AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
     }
 
+    /// Pending "remove this head after the wave" work items, keyed by head ID.
+    private var pendingRemovals: [UUID: DispatchWorkItem] = [:]
+    /// Delay between a process exiting and its head being removed.
+    private let removalDelay: TimeInterval = 10.0
+
     private func handleProcessExit(pid: pid_t, exitCode: Int32) {
         guard let head = heads.first(where: { $0.processID == pid }) else { return }
 
-        idleTimers[head.id]?.cancel()
-        idleTimers.removeValue(forKey: head.id)
+        idleTimers.removeValue(forKey: head.id)?.cancel()
+        runningStartTimes.removeValue(forKey: head.id)
+        // The process is gone; clearing the pid lets a finished head be relaunched.
+        head.processID = nil
 
         // 126/127 mean claude never actually started (chdir or exec failed). Leave the head and
         // its terminal in place, marked errored, so the diagnostic written to the PTY is visible.
         if exitCode == ProcessManager.exitCodeChdirFailed || exitCode == ProcessManager.exitCodeExecFailed {
-            head.processID = nil
             head.state = .errored
             return
         }
@@ -372,11 +387,24 @@ public final class AppState {
         // Close the terminal window
         terminalControllers[head.id]?.close()
 
-        // Remove the head after a delay so the user sees the wave
+        // Remove the head after a delay so the user sees the wave. The work item is
+        // stored so it can be cancelled if the head is relaunched or removed first.
         let headID = head.id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
-            self?.removeHead(id: headID)
+        cancelPendingRemoval(for: headID)
+        let removal = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingRemovals.removeValue(forKey: headID)
+            // Never delete a head that has picked up a new live process in the meantime.
+            guard let head = self.heads.first(where: { $0.id == headID }),
+                  head.processID == nil else { return }
+            self.removeHead(id: headID)
         }
+        pendingRemovals[headID] = removal
+        DispatchQueue.main.asyncAfter(deadline: .now() + removalDelay, execute: removal)
+    }
+
+    private func cancelPendingRemoval(for headID: UUID) {
+        pendingRemovals.removeValue(forKey: headID)?.cancel()
     }
 
     // MARK: - Screen Changes
@@ -431,6 +459,12 @@ public final class AppState {
               head.processID == nil,
               let termController = terminalControllers[headID],
               let bridge = termController.bridge else { return }
+
+        // The user is relaunching a finished head; it must not be swept away by the
+        // removal scheduled when the previous process exited.
+        cancelPendingRemoval(for: headID)
+        head.isWaving = false
+        waveTimers.removeValue(forKey: headID)?.cancel()
 
         let pid = processManager.spawnProcess(
             head: head,

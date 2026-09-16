@@ -183,6 +183,8 @@ final class HeadWindowController {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .utilityWindow
+        // We own the panel's lifetime; it is freed when this controller drops it in tearDown().
+        panel.isReleasedWhenClosed = false
 
         hostingView = PassthroughHostingView(rootView: OrbitingHeadRootView(head: head))
         hostingView.frame = NSRect(origin: .zero, size: contentRect.size)
@@ -237,12 +239,29 @@ final class HeadWindowController {
         }
     }
 
+    deinit {
+        NSLog("[HeadWindowController] deinit for head \(head.id)")
+    }
+
     func showWindow() {
         panel.orderFront(nil)
     }
 
+    /// Hides the panel without destroying it.
     func close() {
         panel.orderOut(nil)
+    }
+
+    /// Permanently closes the panel and breaks references so everything can deallocate.
+    /// The controller must not be used after this call.
+    func tearDown() {
+        panel.onClicked = nil
+        panel.onDragMoved = nil
+        panel.onDragEnded = nil
+        panel.hitRegion = nil
+        hostingView.hitRegion = nil
+        panel.close()
+        panel.contentView = nil
     }
 
     func bringToFront() {
