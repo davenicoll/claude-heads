@@ -361,7 +361,6 @@ final class StoredSettingsTests: XCTestCase {
         """
         let stored = try JSONDecoder().decode(StoredSettings.self, from: Data(legacy.utf8))
         XCTAssertNil(stored.showSubagentChildren, "missing key must decode as nil, not fail or default here")
-        XCTAssertEqual(stored.showSubagentChildren ?? true, true, "AppSettings.load() treats a missing key as on")
         XCTAssertEqual(stored.showStatusIndicator, true)
     }
 

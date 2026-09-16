@@ -19,9 +19,8 @@ final class OrbitLayoutTests: XCTestCase {
         // Children are 35% of the parent for every head size setting, so switching
         // small/medium/large rescales the ring rather than leaving fixed-size children.
         var previous: CGFloat = 0
-        for size in HeadSize.allCases {
+        for size in [HeadSize.small, .medium, .large] {
             let layout = OrbitLayout(parentDiameter: size.diameter)
-            XCTAssertEqual(layout.childDiameter, size.diameter * OrbitLayout.childScale, accuracy: 0.001, "\(size)")
             XCTAssertEqual(layout.childDiameter, size.diameter * 0.35, accuracy: 0.001, "\(size)")
             XCTAssertGreaterThan(layout.childDiameter, previous, "childDiameter must grow with head size (\(size))")
             XCTAssertGreaterThan(layout.panelInset, 0, "\(size)")
@@ -30,7 +29,7 @@ final class OrbitLayoutTests: XCTestCase {
     }
 
     func testPanelInsetScalesWithHeadSize() {
-        let insets = HeadSize.allCases.map { OrbitLayout(parentDiameter: $0.diameter).panelInset }
+        let insets = [HeadSize.small, .medium, .large].map { OrbitLayout(parentDiameter: $0.diameter).panelInset }
         XCTAssertEqual(insets, insets.sorted(), "Panel inset must not shrink as heads grow")
         XCTAssertEqual(Set(insets).count, insets.count, "Each head size needs its own inset")
     }

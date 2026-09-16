@@ -42,6 +42,7 @@ Sources/
     │   └── HookWatcher.swift          # Watches ~/.claude-heads/hooks for <uuid>.done and <uuid>.<agent>.start/.stop markers
     ├── Utilities/
     │   ├── Constants.swift            # Paths, notification names, HeadGeometry (shared head layout metrics)
+    │   ├── OrbitLayout.swift          # Subagent orbit ring geometry (child size, phase, hit-testing, panel inset)
     │   ├── HeadFace.swift             # ASCII faces + FaceSequencer state machine
     │   ├── PathColorGenerator.swift   # FNV-1a hash -> HSL gradient (SwiftUI + NSColor variants)
     │   └── AvatarGenerator.swift      # Draws an initials-on-gradient NSImage (not currently called by the app)
@@ -56,7 +57,7 @@ Each chat head is a `DraggablePanel` (`NSPanel` subclass) configured as:
 - `level: .floating`, `collectionBehavior: [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]`
 - Transparent, shadowless, hosting `HeadView` in a `PassthroughHostingView` that forwards mouse events to the panel so clicks and drags are handled in AppKit rather than SwiftUI gestures
 
-The head panel's size comes from `HeadGeometry` (circle diameter + wave-emoji overhang + 14pt name label). `HeadView`, `HeadWindowController` (sizing and drag clamping) and `TerminalWindowController.fullHeadRect()` all read the same struct.
+The head window's size comes from `HeadGeometry` (circle diameter + wave-emoji overhang + 14pt name label). `HeadView`, `HeadWindowController` (sizing and drag clamping) and `TerminalWindowController.fullHeadRect()` all read the same struct. The panel that hosts it is that window grown by `2 x OrbitLayout.currentPanelInset` (once per side) while subagent children are shown, and exactly the head window when "Show children for subagents" is off. `OrbitLayout` derives the ring from the current head diameter (children are 35% of it) and the `AppSettings.showSubagentChildren` setting only hides the ring and shrinks the panel; subagent tracking is unaffected.
 
 Each head also owns a `FloatingTerminalPanel` (`NSPanel`, `[.titled, .closable, .resizable, .nonactivatingPanel]`, `level: .floating`) containing a SwiftTerm `TerminalView`. It is created when the head is created, hidden by default, and shown/hidden with `orderFront`/`orderOut` rather than being destroyed, so the scrollback survives toggling. Its title bar has a pin button (`NSTitlebarAccessoryViewController`).
 
@@ -73,7 +74,7 @@ Each head also owns a `FloatingTerminalPanel` (`NSPanel`, `[.titled, .closable, 
 
 ## Hook Integration
 
-`HookWatcher` is a file-system watcher (`DispatchSource.makeFileSystemObjectSource`) on `~/.claude-heads/hooks` that looks for `<uuid>.done` marker files, deletes them and calls `onTaskComplete(uuid)`. It also parses `<uuid>.<agent_id>.start` (contents: `agent_type`) and `<uuid>.<agent_id>.stop` markers from the `SubagentStart`/`SubagentStop` hooks into `onSubagentStart`/`onSubagentStop`, which `AppState` uses to maintain each head's orbiting `children`; a Stop event clears them. It is the single source of truth for `notify.sh`, which it rewrites on every launch; the script reads `CLAUDE_INSTANCE_ID` (exported into each spawned `claude`) and touches the marker. `AppState` owns the watcher and routes `onTaskComplete` to `handleHookTaskComplete`, which is authoritative over the PTY-activity heuristic (see Process Lifecycle). Without the hook configured, the wave still fires from PTY idle detection. See the Hook Setup section of the README for configuration. `OrbitLayout` derives the ring from the current head diameter (children are 35% of it), and the "Show children for subagents" setting (`AppSettings.showSubagentChildren`) hides the ring and shrinks the head panel without affecting tracking.
+`HookWatcher` is a file-system watcher (`DispatchSource.makeFileSystemObjectSource`) on `~/.claude-heads/hooks` that looks for `<uuid>.done` marker files, deletes them and calls `onTaskComplete(uuid)`. It also parses `<uuid>.<agent_id>.start` (contents: `agent_type`) and `<uuid>.<agent_id>.stop` markers from the `SubagentStart`/`SubagentStop` hooks into `onSubagentStart`/`onSubagentStop`, which `AppState` uses to maintain each head's orbiting `children`; a Stop event clears them. It is the single source of truth for `notify.sh`, which it rewrites on every launch; the script reads `CLAUDE_INSTANCE_ID` (exported into each spawned `claude`) and touches the marker. `AppState` owns the watcher and routes `onTaskComplete` to `handleHookTaskComplete`, which is authoritative over the PTY-activity heuristic (see Process Lifecycle). Without the hook configured, the wave still fires from PTY idle detection. See the Hook Setup section of the README for configuration.
 
 ## Position Management
 

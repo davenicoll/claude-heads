@@ -7,8 +7,8 @@ import SwiftUI
 /// instead of letting SwiftUI's gesture system consume them.
 /// Also accepts first mouse so the panel responds without needing a focus click.
 ///
-/// The panel is larger than the visible head (it leaves room for the subagent orbit
-/// ring), so hit-testing is restricted by `hitRegion`: points outside the parent head
+/// While subagent children are shown the panel is larger than the visible head (it
+/// leaves room for the orbit ring), so hit-testing is restricted by `hitRegion`: points outside the parent head
 /// and its orbiting children are not claimed by this view, and the transparent panel
 /// area lets the click fall through to whatever is underneath.
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
@@ -323,7 +323,7 @@ final class HeadWindowController {
 
         let children = head.children
         guard AppSettings.shared.showSubagentChildren, !children.isEmpty else { return false }
-        let layout = OrbitLayout(parentDiameter: g.diameter)
+        let layout = OrbitLayout.current
         let phase = OrbitLayout.phase(at: Date())
         let relative = CGPoint(x: dx, y: dy)
         return children.indices.contains { index in
