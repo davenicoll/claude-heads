@@ -392,7 +392,12 @@ final class HeadWindowController {
         frame.origin = NSPoint(x: oldCenter.x - newSize.width / 2, y: oldCenter.y - newSize.height / 2)
         panel.contentInset = inset
         panel.setFrame(frame, display: true)
-        head.position = headPosition(forPanelOrigin: frame.origin)
+        // Only the head size changes the head window origin; toggling the orbit inset
+        // alone leaves it where it was, and a no-op write would still notify observers.
+        let newPosition = headPosition(forPanelOrigin: frame.origin)
+        if head.position != newPosition {
+            head.position = newPosition
+        }
 
         hostingView.frame = NSRect(origin: .zero, size: newSize)
         hostingView.cursorRect = headRectInPanel()
