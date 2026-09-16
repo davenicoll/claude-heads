@@ -71,6 +71,44 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
             terminalView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             terminalView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
+
+        installPinButton()
+    }
+
+    // MARK: - Pinning
+
+    private let pinButton = NSButton()
+
+    /// Adds a pin toggle to the panel's title bar. While pinned, the terminal stays
+    /// open when it loses key status (click-away, switching apps); otherwise it closes.
+    private func installPinButton() {
+        pinButton.bezelStyle = .accessoryBarAction
+        pinButton.isBordered = false
+        pinButton.imagePosition = .imageOnly
+        pinButton.target = self
+        pinButton.action = #selector(togglePinned(_:))
+        pinButton.setButtonType(.momentaryChange)
+        updatePinButton()
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = pinButton
+        accessory.layoutAttribute = .trailing
+        panel.addTitlebarAccessoryViewController(accessory)
+    }
+
+    private func updatePinButton() {
+        let symbol = head.isPinned ? "pin.fill" : "pin"
+        pinButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Pin terminal")
+        pinButton.toolTip = head.isPinned
+            ? "Unpin: close this terminal when it loses focus"
+            : "Pin: keep this terminal open when it loses focus"
+        pinButton.sizeToFit()
+    }
+
+    @objc private func togglePinned(_ sender: Any?) {
+        head.isPinned.toggle()
+        updatePinButton()
+        appState?.saveState()
     }
 
     // MARK: - Window Management
@@ -106,18 +144,19 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
         return false
     }
 
+    /// Unpinned terminals auto-close when the user clicks away (another window or app
+    /// becomes key). Pinned terminals stay open until explicitly closed.
+    func windowDidResignKey(_ notification: Notification) {
+        guard !head.isPinned, panel.isVisible else { return }
+        close()
+    }
+
     // MARK: - Positioning
 
     /// Computes the on-screen rect of the full head (circle + label + padding).
     /// This is the rect that the terminal must not overlap.
     func fullHeadRect() -> NSRect {
-        let d = AppSettings.shared.headSize.diameter
-        let emojiSize = d * 0.52
-        let totalSize = d + emojiSize
-        let zstackHeight = d + emojiSize * 0.6
-        let labelHeight: CGFloat = 14
-        let fullHeight = zstackHeight + labelHeight
-        return NSRect(x: head.position.x, y: head.position.y, width: totalSize, height: fullHeight)
+        NSRect(origin: head.position, size: HeadGeometry.current.windowSize)
     }
 
     /// Tooltip-style positioning: opens toward the screen center, avoids all obstacles.

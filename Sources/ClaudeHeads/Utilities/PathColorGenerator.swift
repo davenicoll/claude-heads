@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum PathColorGenerator {
@@ -10,20 +11,26 @@ enum PathColorGenerator {
 
     /// Gradient of two related colors derived from a folder path string.
     static func gradient(for path: String) -> LinearGradient {
-        let (hue, saturation, lightness) = hslComponents(for: path)
+        let (first, second) = gradientStops(for: path)
 
-        let hueShift: Double = 0.07
-        let hue2 = (hue + hueShift).truncatingRemainder(dividingBy: 1.0)
-        let lightness2 = max(0.30, lightness - 0.08)
-
-        let color1 = colorFromHSL(hue: hue, saturation: saturation, lightness: lightness)
-        let color2 = colorFromHSL(hue: hue2, saturation: saturation, lightness: lightness2)
+        let color1 = colorFromHSL(hue: first.hue, saturation: first.saturation, lightness: first.lightness)
+        let color2 = colorFromHSL(hue: second.hue, saturation: second.saturation, lightness: second.lightness)
 
         return LinearGradient(
             colors: [color1, color2],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
+    }
+
+    /// The same two gradient stops as `gradient(for:)`, as AppKit colors for drawing
+    /// with `NSGradient` (used by `AvatarGenerator`).
+    static func gradientNSColors(for path: String) -> (NSColor, NSColor) {
+        let (first, second) = gradientStops(for: path)
+
+        let c1 = nsColorFromHSL(hue: first.hue, saturation: first.saturation, lightness: first.lightness)
+        let c2 = nsColorFromHSL(hue: second.hue, saturation: second.saturation, lightness: second.lightness)
+        return (c1, c2)
     }
 
     /// Returns .white or .black depending on which contrasts better with the path's color.
@@ -37,7 +44,9 @@ enum PathColorGenerator {
 
     // MARK: - Internal
 
-    private static func hslComponents(for path: String) -> (hue: Double, saturation: Double, lightness: Double) {
+    private typealias HSL = (hue: Double, saturation: Double, lightness: Double)
+
+    private static func hslComponents(for path: String) -> HSL {
         let hash = deterministicHash(path)
 
         let hue = Double(hash & 0xFFFF) / Double(0xFFFF)
@@ -45,6 +54,18 @@ enum PathColorGenerator {
         let lightness = 0.4 + Double((hash >> 32) & 0xFFFF) / Double(0xFFFF) * 0.15    // 0.4 - 0.55
 
         return (hue, saturation, lightness)
+    }
+
+    /// The two HSL stops of a path's gradient: the base color and a slightly
+    /// hue-shifted, darker companion.
+    private static func gradientStops(for path: String) -> (HSL, HSL) {
+        let base = hslComponents(for: path)
+
+        let hueShift: Double = 0.07
+        let hue2 = (base.hue + hueShift).truncatingRemainder(dividingBy: 1.0)
+        let lightness2 = max(0.30, base.lightness - 0.08)
+
+        return (base, (hue2, base.saturation, lightness2))
     }
 
     /// FNV-1a 64-bit hash for deterministic, uniform distribution.
@@ -57,9 +78,10 @@ enum PathColorGenerator {
         return hash
     }
 
-    /// Convert HSL (all 0-1) to SwiftUI Color.
-    private static func colorFromHSL(hue: Double, saturation: Double, lightness: Double) -> Color {
-        // Convert HSL to HSB for SwiftUI's Color(hue:saturation:brightness:)
+    /// Convert HSL (all 0-1) to HSB for `Color(hue:saturation:brightness:)` / `NSColor`.
+    private static func hsbComponents(hue: Double, saturation: Double, lightness: Double)
+        -> (hue: Double, saturation: Double, brightness: Double)
+    {
         let brightness: Double
         let sbSaturation: Double
 
@@ -75,10 +97,20 @@ enum PathColorGenerator {
             sbSaturation = 2.0 * (1.0 - lightness / brightness)
         }
 
-        return Color(
-            hue: hue,
-            saturation: max(0, min(1, sbSaturation)),
-            brightness: max(0, min(1, brightness))
+        return (
+            max(0, min(1, hue)),
+            max(0, min(1, sbSaturation)),
+            max(0, min(1, brightness))
         )
+    }
+
+    private static func colorFromHSL(hue: Double, saturation: Double, lightness: Double) -> Color {
+        let hsb = hsbComponents(hue: hue, saturation: saturation, lightness: lightness)
+        return Color(hue: hsb.hue, saturation: hsb.saturation, brightness: hsb.brightness)
+    }
+
+    private static func nsColorFromHSL(hue: Double, saturation: Double, lightness: Double) -> NSColor {
+        let hsb = hsbComponents(hue: hue, saturation: saturation, lightness: lightness)
+        return NSColor(hue: hsb.hue, saturation: hsb.saturation, brightness: hsb.brightness, alpha: 1.0)
     }
 }

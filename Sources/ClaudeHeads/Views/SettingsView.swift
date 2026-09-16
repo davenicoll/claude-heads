@@ -7,8 +7,6 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("General") {
-                Toggle("Launch at login", isOn: Bindable(settings).launchAtLogin)
-
                 Picker("Head size", selection: Bindable(settings).headSize) {
                     ForEach(HeadSize.allCases, id: \.self) { size in
                         Text(size.rawValue.capitalized).tag(size)

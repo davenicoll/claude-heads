@@ -1,49 +1,54 @@
 # Claude Heads - Features
 
+This describes what the app does today. Anything not listed here is not implemented.
+
 ## Chat Heads
 
-- Floating circular avatars on the desktop, always rendered above all other windows
-- Each head represents a running `claude` CLI process
-- Heads display the folder name the claude instance was started in (e.g. "claude-heads", "~")
-- Auto-generated background color/gradient derived deterministically from the full folder path
-- Customizable avatar image per instance (falls back to a generated default)
-- Heads can be dragged anywhere on screen and remember their position across launches
-- Multi-monitor aware: heads reposition gracefully when displays are added, removed, or rearranged
-- Heads snap together when dragged near each other, forming clusters; drag apart to unsnap
-- Badge count or subtle indicator when there is unread output
+- Floating circular heads on the desktop, rendered above other windows on every Space (including alongside full-screen apps)
+- One head per `claude` CLI process spawned by the app; the app does not discover `claude` processes started elsewhere
+- Each head shows the name of the folder the session was started in
+- Background is a gradient derived deterministically from the full folder path; if `avatarImageData` is present in `state.json` it is drawn instead (there is currently no UI for choosing an avatar)
+- An ASCII face on the head cycles through expressions that follow the session's state (working, idle, finished, errored)
+- Optional coloured status dot (green idle, blue running, orange finished, red errored), off by default
+- Heads can be dragged anywhere; the circle is kept on screen and the position is remembered across launches
+- Multi-monitor aware: when displays change, heads on a vanished screen move to the closest remaining screen and all heads are clamped to visible frames
+- Magnetic snap: when a drag ends within the snap distance of another head's edge or centre line, the head snaps edge-to-edge. Touching heads are recorded as a snap group. Dragging moves a single head only (groups do not move together)
 
-## Terminal Overlay
+## Terminal
 
-- Single-click a head to reveal its terminal output as a popover/tooltip anchored to the head
-- Terminal shows the full PTY output of the claude process (ANSI colors, cursor movement)
-- Terminal font is configurable in app settings
-- Terminal popover can be pinned open so it stays visible while interacting with other apps
-- Pinned terminals remain always-on-top alongside their head
-- Scrollback buffer for reviewing history
-- Keyboard input is forwarded to the claude process when the terminal is focused
+- Click a head to toggle a floating terminal window attached to the session's pseudo-terminal
+- Full terminal emulation via SwiftTerm (ANSI colours, cursor movement, scrollback); resizing the window resizes the PTY
+- Keyboard input in the terminal goes to the `claude` process; links open in the browser; copy goes to the clipboard
+- The terminal opens next to its head, toward the screen centre, avoiding other heads and open terminals, and follows the head while it is dragged
+- Pin button in the terminal title bar: a pinned terminal stays open when you click elsewhere; an unpinned terminal closes when it loses focus. Pin state is persisted per head
 
 ## Process Management
 
-- Launch new claude instances from the app (choose directory, optional extra CLI args)
-- Settings allow default extra CLI parameters (e.g. `--dangerously-skip-permissions`)
-- Per-instance CLI parameter overrides
-- Graceful shutdown: sends SIGINT, waits, then SIGKILL if needed
-- Automatically removes head when process exits
-- Status indicator on head: running (pulsing), idle, finished, errored
+- Launch a new session from the menu bar ("New Head...", Cmd-N): choose a folder, and `claude` starts in it
+- Global Claude Code flags in Settings: `--continue` (with automatic fallback to a fresh session if none exists), `--dangerously-skip-permissions`, `--remote-control`, plus free-form extra arguments; all are applied to every new session
+- Sessions persist: on relaunch the app re-spawns `claude` for every saved head
+- Graceful shutdown: `SIGINT`, then `SIGKILL` after 3 seconds
+- When a process exits the head shows a finished state, waves, closes its terminal and disappears after 10 seconds
 
-## Task Completion Notification
+## Wave Animation
 
-- Integrates with Claude Code's hook system (`post_tool_use` / session lifecycle hooks)
-- When a task finishes, the chat head plays a waving-hand animation to attract attention
-- Clicking the animated head dismisses the wave and opens the terminal
-- Optional system notification in addition to the wave
+- The head waves when Claude goes quiet after at least 5 seconds of continuous output (a task finishing), and when the process exits
+- Clicking the waving head dismisses the wave and opens the terminal
+- A `HookWatcher` for Claude Code hook marker files exists in the codebase but is not currently connected to the UI; see the README Hook Setup section
 
 ## Settings
 
-- Global default CLI arguments for new instances
-- Avatar image per instance
-- Terminal font family and size
-- Head size (small / medium / large)
-- Snap distance threshold
-- Launch at login toggle
-- Menu bar icon with quick access to all heads and settings
+- Head size (small / medium / large), applied live
+- Snap distance (20-120pt)
+- Show/hide status indicator
+- Terminal font family (monospace fonts only) and size, applied live to open terminals
+- Claude Code flags and extra arguments
+- Menu bar icon lists all heads (click to bring one to the front), New Head, Settings, Quit; the app has no Dock icon
+
+## Not implemented
+
+- Launch at login
+- System notifications or badge counts
+- Custom avatar picker
+- Group dragging of snapped heads
+- Discovery of externally launched `claude` processes

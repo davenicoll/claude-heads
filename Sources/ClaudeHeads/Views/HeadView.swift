@@ -7,17 +7,13 @@ struct HeadView: View {
     @State private var timer: Timer?
     @State private var sequencer = FaceSequencer()
 
-    private var diameter: CGFloat {
-        AppSettings.shared.headSize.diameter
+    private var geometry: HeadGeometry {
+        HeadGeometry.current
     }
 
-    private var emojiSize: CGFloat {
-        diameter * 0.52
-    }
-
-    private var totalSize: CGFloat {
-        diameter + emojiSize
-    }
+    private var diameter: CGFloat { geometry.diameter }
+    private var emojiSize: CGFloat { geometry.emojiSize }
+    private var totalSize: CGFloat { geometry.totalWidth }
 
     private var faceColor: Color {
         .black
@@ -28,7 +24,7 @@ struct HeadView: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: HeadGeometry.labelSpacing) {
             circleBackground
                 .frame(width: diameter, height: diameter)
                 .clipShape(Circle())

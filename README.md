@@ -1,18 +1,21 @@
 # Claude Heads (AKA a stupid experiment)
 
-A native macOS app that puts floating chat heads on your desktop, one per running Claude Code instance.
+A native macOS app that puts floating chat heads on your desktop, one per Claude Code session you launch from the app.
 
-Each head shows the folder name it was launched in, with an auto-generated color derived from the path. Click a head to see its terminal output. When a task finishes, the head waves to get your attention.
+Pick a project folder from the menu bar and Claude Heads spawns `claude` in that folder inside a pseudo-terminal, then shows a head for it. Each head shows the folder name, with an auto-generated color derived from the path. Click a head to see its terminal. When Claude goes quiet after a stretch of work, the head waves to get your attention.
+
+Heads are only created for sessions started from the app; it does not discover `claude` processes launched elsewhere (e.g. from your own terminal).
 
 ## Features
 
-- Floating always-on-top chat heads, one per `claude` CLI process
-- Terminal popover with full PTY support (click to view, pin to keep open)
-- Auto-generated backgrounds from folder paths, customizable avatars
-- Magnetic snap: heads stick together when dragged close
-- Multi-monitor aware with position memory
-- Wave animation on task completion (via Claude Code hooks)
-- Configurable terminal font, head size, default CLI arguments
+- Floating always-on-top chat heads, one per `claude` CLI process spawned by the app
+- Click a head to open a floating terminal (SwiftTerm) attached to the session's PTY; keyboard input goes straight to `claude`
+- Pin a terminal from its title bar to keep it open when you click away; unpinned terminals close on focus loss
+- Auto-generated gradient backgrounds derived from the folder path
+- Magnetic snap: drop a head near another and it snaps edge-to-edge
+- Multi-monitor aware with position memory across launches
+- Wave animation when Claude goes idle after working
+- Configurable terminal font, head size, snap distance, and default CLI flags/arguments
 - Menu bar app (no dock icon)
 
 ## Requirements
