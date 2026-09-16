@@ -30,19 +30,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return url
         }
 
-        // 2. Running via `swift run`: SwiftPM places the resource bundle next to the executable,
-        //    which is where the generated Bundle.module accessor looks. Bundle.module traps if
-        //    the bundle is missing (e.g. a bare binary copied out of .build), so check first.
+        // 2. Running via `swift run`: SwiftPM places the resource bundle next to the executable.
+        //    The generated Bundle.module accessor is deliberately avoided: it traps if the bundle
+        //    is missing (e.g. a bare binary copied out of .build), so load the sidecar explicitly.
         let moduleBundleName = "ClaudeHeads_ClaudeHeadsCore.bundle"
         let sidecar = Bundle.main.bundleURL.appendingPathComponent(moduleBundleName)
-        if FileManager.default.fileExists(atPath: sidecar.path) {
-            return Bundle.module.url(forResource: iconName, withExtension: iconExtension)
-        }
-
-        // 3. Resource bundle copied into Contents/Resources by scripts/bundle.sh. Bundle.module
-        //    does not search there, so load it explicitly.
-        if let resourceURL = Bundle.main.resourceURL,
-           let bundle = Bundle(url: resourceURL.appendingPathComponent(moduleBundleName)) {
+        if let bundle = Bundle(url: sidecar) {
             return bundle.url(forResource: iconName, withExtension: iconExtension)
         }
 

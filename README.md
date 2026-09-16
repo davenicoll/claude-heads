@@ -38,7 +38,8 @@ resource bundles, ad-hoc code signature):
 This writes `dist/ClaudeHeads.app`. The script is idempotent; re-running it
 rebuilds and replaces the bundle. The bundle is ad-hoc signed so it launches
 locally without Gatekeeper complaints, but it is not notarized, so it is not
-suitable for distributing to other machines as-is.
+suitable for distributing to other machines as-is. It is also built for the
+host architecture only (Apple silicon or Intel, whichever ran the script).
 
 ## Run
 

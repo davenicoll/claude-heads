@@ -57,13 +57,14 @@ for bundle in "$BUILD_DIR"/*.bundle; do
     # codesign --deep refuses bundles without an Info.plist, so give them a minimal one.
     if [[ ! -f "$RESOURCES_DIR/$name/Info.plist" ]]; then
         bundle_base="${name%.bundle}"
+        # Bundle identifiers permit only alphanumerics, hyphens and periods; SwiftPM names contain underscores.
         cat > "$RESOURCES_DIR/$name/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>${BUNDLE_ID}.resources.${bundle_base}</string>
+    <string>${BUNDLE_ID}.resources.${bundle_base//_/-}</string>
     <key>CFBundleName</key>
     <string>${bundle_base}</string>
     <key>CFBundlePackageType</key>
