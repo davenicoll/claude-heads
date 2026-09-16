@@ -78,6 +78,15 @@ public final class AppState {
         ) { [weak self] _ in
             self?.resizeAllHeads()
         }
+
+        // Showing/hiding subagent children changes the orbit inset, so the panels resize too.
+        NotificationCenter.default.addObserver(
+            forName: .subagentChildrenVisibilityChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.resizeAllHeads()
+        }
     }
 
     // MARK: - Head Management
@@ -230,7 +239,7 @@ public final class AppState {
         return rects
     }
 
-    /// Resize all head windows to match the current head size setting
+    /// Resize all head windows to match the current head size and subagent-children settings.
     func resizeAllHeads() {
         for (_, controller) in headWindowControllers {
             controller.resizeToFit()

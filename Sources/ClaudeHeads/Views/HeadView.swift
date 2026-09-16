@@ -53,7 +53,13 @@ struct HeadView: View {
                 .overlay {
                     // Subagents orbit the circle; the overlay is centred on it and is
                     // allowed to draw outside its bounds (the hosting panel is enlarged).
-                    SubagentOrbitView(children: head.children, layout: OrbitLayout(parentDiameter: diameter))
+                    // With "Show children for subagents" off the view gets no children, so
+                    // it renders nothing and its TimelineView stays paused; the model keeps
+                    // tracking children so they reappear as soon as it is turned back on.
+                    SubagentOrbitView(
+                        children: AppSettings.shared.showSubagentChildren ? head.children : [],
+                        layout: OrbitLayout(parentDiameter: diameter)
+                    )
                 }
                 .padding(.top, emojiSize * HeadGeometry.emojiTopPadding)
                 .frame(width: totalSize)

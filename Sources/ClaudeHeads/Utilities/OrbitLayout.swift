@@ -26,6 +26,19 @@ struct OrbitLayout: Equatable {
         self.parentDiameter = parentDiameter
     }
 
+    /// Layout for the head size currently selected in settings, so children scale with
+    /// small/medium/large heads.
+    static var current: OrbitLayout {
+        OrbitLayout(parentDiameter: HeadGeometry.current.diameter)
+    }
+
+    /// How much every head panel must grow beyond the plain head window right now: the
+    /// ring inset for the current head size, or zero when "Show children for subagents" is
+    /// off. `OrbitingHeadRootView` and `HeadWindowController` must agree on this number.
+    static var currentPanelInset: CGFloat {
+        AppSettings.shared.showSubagentChildren ? current.panelInset : 0
+    }
+
     var childDiameter: CGFloat { parentDiameter * Self.childScale }
     var childRadius: CGFloat { childDiameter / 2 }
 

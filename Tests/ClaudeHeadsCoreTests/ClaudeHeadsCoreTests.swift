@@ -347,6 +347,37 @@ final class HeadGeometryTests: XCTestCase {
     }
 }
 
+// MARK: - StoredSettings Tests
+
+final class StoredSettingsTests: XCTestCase {
+
+    /// Settings JSON written before "Show children for subagents" existed has no such key;
+    /// it must still decode, and `AppSettings.load()` then defaults the flag to true.
+    func testDecodesSettingsWrittenBeforeShowSubagentChildrenExisted() throws {
+        let legacy = """
+        {"defaultExtraArgs":"","terminalFontName":"Menlo","terminalFontSize":12,
+         "headSize":"medium","snapDistance":60,"launchAtLogin":false,
+         "showStatusIndicator":true,"claudeContinue":true}
+        """
+        let stored = try JSONDecoder().decode(StoredSettings.self, from: Data(legacy.utf8))
+        XCTAssertNil(stored.showSubagentChildren, "missing key must decode as nil, not fail or default here")
+        XCTAssertEqual(stored.showSubagentChildren ?? true, true, "AppSettings.load() treats a missing key as on")
+        XCTAssertEqual(stored.showStatusIndicator, true)
+    }
+
+    func testShowSubagentChildrenRoundTrips() throws {
+        let stored = StoredSettings(
+            defaultExtraArgs: "", terminalFontName: "Menlo", terminalFontSize: 12,
+            headSize: .large, snapDistance: 60, launchAtLogin: false,
+            showStatusIndicator: false, showSubagentChildren: false,
+            claudeContinue: true, claudeSkipPermissions: false, claudeRemoteControl: false
+        )
+        let data = try JSONEncoder().encode(stored)
+        let decoded = try JSONDecoder().decode(StoredSettings.self, from: data)
+        XCTAssertEqual(decoded.showSubagentChildren, false)
+    }
+}
+
 // MARK: - HeadSize Tests
 
 final class HeadSizeTests: XCTestCase {

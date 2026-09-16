@@ -29,6 +29,7 @@ struct SettingsView: View {
                 }
 
                 Toggle("Show status indicator", isOn: Bindable(settings).showStatusIndicator)
+                Toggle("Show children for subagents", isOn: Bindable(settings).showSubagentChildren)
             }
 
             Section("Terminal") {
@@ -96,6 +97,10 @@ struct SettingsView: View {
         }
         .onChange(of: settings.headSize) {
             NotificationCenter.default.post(name: .headSizeChanged, object: nil)
+        }
+        .onChange(of: settings.showSubagentChildren) {
+            // The head panel is only enlarged for the orbit ring while children are shown.
+            NotificationCenter.default.post(name: .subagentChildrenVisibilityChanged, object: nil)
         }
     }
 
