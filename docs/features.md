@@ -25,9 +25,9 @@ This describes what the app does today. Anything not listed here is not implemen
 ## Process Management
 
 - Launch a new session from the menu bar ("New Head...", Cmd-N): choose a folder, and `claude` starts in it
-- Global Claude Code flags in Settings: `--continue` (with automatic fallback to a fresh session if none exists), `--dangerously-skip-permissions`, `--remote-control`, plus free-form extra arguments; all are applied to every new session
+- Global Claude Code flags in Settings: `--continue` (with automatic fallback to a fresh session if none exists), `--dangerously-skip-permissions`, `--remote-control`, plus free-form extra arguments (split shell-style: quote arguments that contain spaces, backslash escapes); all are applied to every new session
 - Sessions persist: on relaunch the app re-spawns `claude` for every saved head
-- Shutdown: on quit, `shutdown()` sends `SIGINT` to every child and saves state; the 3s `SIGKILL` escalation in `killProcess` only applies to heads removed while the app is still running
+- Shutdown: on quit, `shutdown()` saves state and calls `killAll`, which sends `SIGHUP` to every child process group, waits up to 2s, then `SIGKILL`s and reaps whatever is left before the app terminates. Removing a head while the app is running uses `killProcess` (`SIGHUP`, then `SIGKILL` after 2s)
 - When a process exits the head shows a finished state, waves, closes its terminal and disappears after 10 seconds
 
 ## Wave Animation

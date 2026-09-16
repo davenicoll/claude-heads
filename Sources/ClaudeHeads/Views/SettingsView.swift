@@ -79,7 +79,7 @@ struct SettingsView: View {
             } header: {
                 Text("Claude Code")
             } footer: {
-                Text("Flags and extra arguments are passed to every new Claude Code instance.")
+                Text("Flags and extra arguments are passed to every new Claude Code instance. Quote arguments that contain spaces (shell-style).")
                     .foregroundStyle(.secondary)
             }
         }

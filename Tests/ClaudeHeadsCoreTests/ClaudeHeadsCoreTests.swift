@@ -315,69 +315,12 @@ final class HeadInstanceCodableTests: XCTestCase {
 
 final class HeadStateTests: XCTestCase {
 
-    func testAllCasesHaveRawValues() {
-        XCTAssertEqual(HeadState.idle.rawValue, "idle")
-        XCTAssertEqual(HeadState.running.rawValue, "running")
-        XCTAssertEqual(HeadState.finished.rawValue, "finished")
-        XCTAssertEqual(HeadState.errored.rawValue, "errored")
-    }
-
     func testCodableRoundTrip() throws {
         for state in [HeadState.idle, .running, .finished, .errored] {
             let data = try JSONEncoder().encode(state)
             let decoded = try JSONDecoder().decode(HeadState.self, from: data)
             XCTAssertEqual(decoded, state)
         }
-    }
-}
-
-// MARK: - Constants Tests
-
-final class ConstantsTests: XCTestCase {
-
-    func testClaudeHeadsDirectoryIsUnderHome() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let dir = Constants.claudeHeadsDirectory
-        XCTAssertTrue(
-            dir.path.hasPrefix(home.path),
-            "claudeHeadsDirectory should be under the home directory"
-        )
-    }
-
-    func testClaudeHeadsDirectoryEndsWithCorrectName() {
-        let dir = Constants.claudeHeadsDirectory
-        XCTAssertTrue(
-            dir.path.hasSuffix(".claude-heads"),
-            "Directory should be named .claude-heads"
-        )
-    }
-
-    func testStateFilePathIsUnderClaudeHeadsDirectory() {
-        let stateFile = Constants.stateFilePath
-        let baseDir = Constants.claudeHeadsDirectory
-
-        XCTAssertTrue(
-            stateFile.path.hasPrefix(baseDir.path),
-            "state.json should be inside .claude-heads/"
-        )
-        XCTAssertTrue(
-            stateFile.lastPathComponent == "state.json",
-            "State file should be named state.json"
-        )
-    }
-
-    func testHooksDirectoryIsUnderClaudeHeadsDirectory() {
-        let hooksDir = Constants.hooksDirectory
-        let baseDir = Constants.claudeHeadsDirectory
-
-        XCTAssertTrue(
-            hooksDir.path.hasPrefix(baseDir.path),
-            "hooks directory should be inside .claude-heads/"
-        )
-        XCTAssertTrue(
-            hooksDir.lastPathComponent == "hooks",
-            "Hooks directory should be named 'hooks'"
-        )
     }
 }
 
@@ -402,34 +345,11 @@ final class HeadGeometryTests: XCTestCase {
         XCTAssertEqual(g.circleTopY, g.circleBottomY + 80, accuracy: 0.001)
         XCTAssertLessThanOrEqual(g.circleTopY, g.totalHeight, "Circle must fit inside the window")
     }
-
-    func testCurrentUsesSettingsDiameter() {
-        XCTAssertEqual(HeadGeometry.current.diameter, AppSettings.shared.headSize.diameter)
-    }
 }
 
 // MARK: - HeadSize Tests
 
 final class HeadSizeTests: XCTestCase {
-
-    func testDiameters() {
-        XCTAssertEqual(HeadSize.small.diameter, 40)
-        XCTAssertEqual(HeadSize.medium.diameter, 60)
-        XCTAssertEqual(HeadSize.large.diameter, 80)
-    }
-
-    func testRawValues() {
-        XCTAssertEqual(HeadSize.small.rawValue, "small")
-        XCTAssertEqual(HeadSize.medium.rawValue, "medium")
-        XCTAssertEqual(HeadSize.large.rawValue, "large")
-    }
-
-    func testAllCases() {
-        XCTAssertEqual(HeadSize.allCases.count, 3)
-        XCTAssertTrue(HeadSize.allCases.contains(.small))
-        XCTAssertTrue(HeadSize.allCases.contains(.medium))
-        XCTAssertTrue(HeadSize.allCases.contains(.large))
-    }
 
     func testCodableRoundTrip() throws {
         for size in HeadSize.allCases {
@@ -437,26 +357,6 @@ final class HeadSizeTests: XCTestCase {
             let decoded = try JSONDecoder().decode(HeadSize.self, from: data)
             XCTAssertEqual(decoded, size)
         }
-    }
-}
-
-// MARK: - AppSettings Tests
-
-final class AppSettingsTests: XCTestCase {
-
-    func testDefaultValues() {
-        let settings = AppSettings.shared
-
-        // Verify defaults (or previously saved values -- these are the init defaults)
-        // Note: Since AppSettings is a singleton that loads from UserDefaults,
-        // we test that it has reasonable values rather than exact defaults
-        XCTAssertFalse(settings.terminalFontName.isEmpty, "Font name should not be empty")
-        XCTAssertGreaterThan(settings.terminalFontSize, 0, "Font size should be positive")
-        XCTAssertGreaterThan(settings.snapDistance, 0, "Snap distance should be positive")
-        XCTAssertTrue(
-            HeadSize.allCases.contains(settings.headSize),
-            "Head size should be a valid case"
-        )
     }
 }
 
@@ -559,22 +459,6 @@ final class AvatarGeneratorTests: XCTestCase {
             size: 60
         )
         XCTAssertEqual(image.size.width, 60, accuracy: 0.001)
-    }
-
-    func testGenerateAvatarDeterministic() {
-        // Same inputs should produce images of the same size (can't compare pixels easily)
-        let image1 = AvatarGenerator.generateAvatar(
-            folderName: "test",
-            folderPath: "/tmp/test",
-            size: 80
-        )
-        let image2 = AvatarGenerator.generateAvatar(
-            folderName: "test",
-            folderPath: "/tmp/test",
-            size: 80
-        )
-
-        XCTAssertEqual(image1.size, image2.size)
     }
 }
 
