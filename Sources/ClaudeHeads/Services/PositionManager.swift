@@ -157,12 +157,9 @@ final class PositionManager {
     }
 
     /// Clamps a window origin so the whole `size`-sized rect anchored at it stays inside `rect`.
-    /// If the rect is larger than `rect`, the origin is pinned to `rect`'s min edge.
+    /// Same rule as `DraggablePanel.clampedToScreen`, via `HeadGeometry.clampOrigin`.
     func clampPosition(_ point: CGPoint, size: NSSize, to rect: NSRect) -> CGPoint {
-        CGPoint(
-            x: max(rect.minX, min(point.x, rect.maxX - size.width)),
-            y: max(rect.minY, min(point.y, rect.maxY - size.height))
-        )
+        HeadGeometry.clampOrigin(point, size: size, in: rect)
     }
 
     /// Extracts the display ID from an NSScreen.

@@ -127,6 +127,7 @@ public final class AppState {
         idleTimers.removeValue(forKey: id)?.cancel()
         waveTimers.removeValue(forKey: id)?.cancel()
         runningStartTimes.removeValue(forKey: id)
+        hookIdleAt.removeValue(forKey: id)
 
         // Tear down the windows for real (close + drop the controllers) so the panels,
         // hosting view and SwiftTerm view can deallocate. Panels use
@@ -379,7 +380,9 @@ public final class AppState {
             return
         }
 
-        // Show finished state with wave animation
+        // Show finished state with wave animation. Cancel any in-flight wave dismiss so
+        // it cannot cut this final wave short.
+        waveTimers.removeValue(forKey: head.id)?.cancel()
         head.state = .finished
         head.isWaving = true
         head.children.removeAll()

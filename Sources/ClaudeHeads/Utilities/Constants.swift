@@ -80,4 +80,23 @@ struct HeadGeometry {
 
     /// Y offset of the circle's top edge inside the window.
     var circleTopY: CGFloat { circleBottomY + diameter }
+
+    // MARK: Screen clamping
+
+    /// Clamps a window origin so the whole `size`-sized rect anchored at it stays inside
+    /// `rect`. If the rect is larger than `rect`, the origin is pinned to `rect`'s min edge.
+    static func clampOrigin(_ origin: CGPoint, size: CGSize, in rect: CGRect) -> CGPoint {
+        CGPoint(
+            x: max(rect.minX, min(origin.x, rect.maxX - size.width)),
+            y: max(rect.minY, min(origin.y, rect.maxY - size.height))
+        )
+    }
+
+    /// Clamps a head window origin (`HeadInstance.position`) so the full head window
+    /// (circle, emoji overhang and name label) stays inside `rect`, normally a screen's
+    /// `visibleFrame`. Drag clamping and display remapping both use this so a head that
+    /// is legal after a drag is never moved again on relaunch or display change.
+    func clampWindowOrigin(_ origin: CGPoint, in rect: CGRect) -> CGPoint {
+        Self.clampOrigin(origin, size: windowSize, in: rect)
+    }
 }

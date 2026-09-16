@@ -572,4 +572,15 @@ final class PositionManagerClampTests: XCTestCase {
         let p = manager.clampPosition(CGPoint(x: 500, y: 500), size: huge, to: screen)
         XCTAssertEqual(p, CGPoint(x: screen.minX, y: screen.minY))
     }
+
+    func testHeadGeometryClampUsesFullWindowSize() {
+        // The remap clamp and the drag clamp share this rule: the whole head window
+        // (circle + emoji overhang + label) must stay inside the screen.
+        let g = HeadGeometry(diameter: 80)
+        let p = g.clampWindowOrigin(CGPoint(x: 990, y: 790), in: screen)
+        XCTAssertEqual(p.x, screen.maxX - g.windowSize.width, accuracy: 0.001)
+        XCTAssertEqual(p.y, screen.maxY - g.windowSize.height, accuracy: 0.001)
+        XCTAssertEqual(
+            manager.clampPosition(CGPoint(x: 990, y: 790), size: g.windowSize, to: screen), p)
+    }
 }
