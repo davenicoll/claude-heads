@@ -217,16 +217,14 @@ struct SubagentOrbitView: View {
 }
 
 /// A single orbiting subagent: a miniature head coloured by its agent type, with a
-/// caption showing the type while hovered.
+/// caption showing its label (task description, else type, else id) while hovered.
 private struct SubagentHeadView: View {
     let child: SubagentInstance
     let diameter: CGFloat
     let isHovered: Bool
 
-    private var colorKey: String { "subagent:" + child.type.lowercased() }
-
     var body: some View {
-        PathColorGenerator.gradient(for: colorKey)
+        PathColorGenerator.gradient(for: child.colorKey)
             .frame(width: diameter, height: diameter)
             .clipShape(Circle())
             .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1))
@@ -240,7 +238,7 @@ private struct SubagentHeadView: View {
             }
             .overlay(alignment: .top) {
                 if isHovered {
-                    Text(child.type)
+                    Text(child.label)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -253,7 +251,7 @@ private struct SubagentHeadView: View {
                         .transition(.opacity)
                 }
             }
-            .help(child.type)
-            .accessibilityLabel("Subagent \(child.type)")
+            .help(child.tooltip)
+            .accessibilityLabel("Subagent \(child.label)")
     }
 }

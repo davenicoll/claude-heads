@@ -2,10 +2,10 @@ import Foundation
 
 // MARK: - HookMarker
 
-/// A parsed marker file written into the hooks directory by `notify.sh`.
+/// A parsed marker filename written into the hooks directory by `notify.sh`.
 ///
 /// Filenames are `<uuid>.done`, `<uuid>.<agentid>.start` and `<uuid>.<agentid>.stop`.
-/// The `.start` marker's contents hold the subagent type (e.g. `Explore`).
+/// Every marker's contents are the raw hook event JSON (see `HookPayload`).
 enum HookMarker: Equatable {
     case taskComplete(instance: UUID)
     case subagentStart(instance: UUID, agentID: String)
@@ -47,13 +47,53 @@ enum HookMarker: Equatable {
             scalar == "-" || scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
         }
     }
+}
 
-    /// Reads and sanitises the subagent type stored in a `.start` marker's contents.
-    /// Falls back to `"agent"` when the file is empty or unreadable.
-    static func agentType(fromContents data: Data?) -> String {
-        guard let data, let raw = String(data: data, encoding: .utf8) else { return "agent" }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "agent" : String(trimmed.prefix(64))
+// MARK: - HookPayload
+
+/// The parts of a hook event payload (a marker file's contents) that the app uses.
+///
+/// `notify.sh` stores stdin verbatim, so this is the JSON object Claude Code handed the
+/// hook. Parsing is deliberately lenient: an empty file, a truncated write, a non-object
+/// root or missing fields all yield an `.empty` payload and the filename alone drives
+/// the event.
+struct HookPayload: Equatable {
+    /// `agent_type` (may legitimately be empty in Claude Code 2.1.x payloads).
+    var agentType: String = ""
+    /// A top-level `description`, if a future payload carries one.
+    var description: String?
+    /// `background_tasks`, or nil when the payload has no such array.
+    var backgroundTasks: [BackgroundTask]?
+
+    static let empty = HookPayload()
+
+    static func parse(_ data: Data?) -> HookPayload {
+        guard let data, !data.isEmpty,
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return .empty
+        }
+
+        var payload = HookPayload()
+        payload.agentType = (root["agent_type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let description = root["description"] as? String {
+            payload.description = description
+        }
+        if let tasks = root["background_tasks"] as? [Any] {
+            payload.backgroundTasks = tasks.compactMap { Self.backgroundTask(from: $0) }
+        }
+        return payload
+    }
+
+    private static func backgroundTask(from any: Any) -> BackgroundTask? {
+        guard let dict = any as? [String: Any],
+              let id = dict["id"] as? String, !id.isEmpty else { return nil }
+        return BackgroundTask(
+            id: id,
+            type: dict["type"] as? String ?? "",
+            description: dict["description"] as? String,
+            status: dict["status"] as? String ?? "",
+            agentType: dict["agent_type"] as? String
+        )
     }
 }
 
@@ -62,22 +102,30 @@ enum HookMarker: Equatable {
 /// Watches for Claude Code hook signals by monitoring a hooks directory for marker
 /// files written by a shell script hook, and fans them out as typed events:
 ///
-/// - `<uuid>.done`               -> `onTaskComplete(uuid)`            (Stop)
-/// - `<uuid>.<agent>.start`      -> `onSubagentStart(uuid, agent, type)` (SubagentStart)
-/// - `<uuid>.<agent>.stop`       -> `onSubagentStop(uuid, agent)`     (SubagentStop)
+/// - `<uuid>.done`           -> `onTaskComplete(uuid)`                          (Stop)
+/// - `<uuid>.<agent>.start`  -> `onSubagentStart(uuid, agent, type, description)` (SubagentStart)
+/// - `<uuid>.<agent>.stop`   -> `onSubagentStop(uuid, agent)`                    (SubagentStop)
+/// - any marker whose payload has `background_tasks` -> `onBackgroundTasks(uuid, tasks)`,
+///   delivered just before the marker's own event.
 ///
 /// This is the single source of truth for `notify.sh`: the script is rewritten on
 /// every launch so stale versions are always replaced.
 final class HookWatcher {
 
-    /// Called on the main queue when a task completes, with the instance UUID.
-    var onTaskComplete: ((UUID) -> Void)?
+    /// Called on the main queue when a task completes, with the instance UUID and the
+    /// `background_tasks` list from the Stop payload (nil when the payload had none).
+    var onTaskComplete: ((UUID, _ backgroundTasks: [BackgroundTask]?) -> Void)?
 
-    /// Called on the main queue when a subagent starts under the given head.
-    var onSubagentStart: ((UUID, _ agentID: String, _ agentType: String) -> Void)?
+    /// Called on the main queue when a subagent starts under the given head. `agentType`
+    /// may be empty; `description` is only set when the payload carried one.
+    var onSubagentStart: ((UUID, _ agentID: String, _ agentType: String, _ description: String?) -> Void)?
 
     /// Called on the main queue when a subagent under the given head stops.
     var onSubagentStop: ((UUID, _ agentID: String) -> Void)?
+
+    /// Called on the main queue, before the marker's own event, whenever a payload lists
+    /// the session's background tasks.
+    var onBackgroundTasks: ((UUID, [BackgroundTask]) -> Void)?
 
     /// Name of the environment variable the spawned `claude` process receives so the
     /// hook script can identify which head it belongs to.
@@ -118,11 +166,13 @@ final class HookWatcher {
     ///
     /// The event is taken from `hook_event_name` in the stdin JSON. `Stop` (or no event
     /// name at all, for manual/legacy invocation) writes `<uuid>.done`; `SubagentStart`
-    /// writes `<uuid>.<agent_id>.start` containing `agent_type`; `SubagentStop` writes
-    /// `<uuid>.<agent_id>.stop`. Any other named event (Notification, PreToolUse, ...)
-    /// writes nothing, and so does a piped stdin that yields no input (e.g. a writer that
-    /// held the pipe open past the read timeout), so a stray hook can never fake a Stop
-    /// and wipe a head's subagents. Only stock macOS tools are used (bash, sed, tr, mv).
+    /// writes `<uuid>.<agent_id>.start`; `SubagentStop` writes `<uuid>.<agent_id>.stop`.
+    /// Every marker's contents are the stdin JSON verbatim, so the app can read whatever
+    /// fields it needs (`agent_type`, `background_tasks`, ...) with a real JSON parser.
+    /// Any other named event (Notification, PreToolUse, ...) writes nothing, and so does
+    /// a piped stdin that yields no input (e.g. a writer that held the pipe open past the
+    /// read timeout), so a stray hook can never fake a Stop. Only stock macOS tools are
+    /// used (bash 3.2, sed, tr, mv).
     static let notifyScriptContent = """
     #!/bin/bash
     # Claude Heads hook.
@@ -133,9 +183,10 @@ final class HookWatcher {
     # The head to notify is identified by $CLAUDE_INSTANCE_ID (set by Claude Heads
     # in the spawned claude process), or by $1 when invoked manually.
     #
-    # Markers written into this directory (picked up by HookWatcher):
+    # Markers written into this directory (picked up by HookWatcher); each one
+    # contains the stdin JSON verbatim:
     #   Stop          -> <uuid>.done
-    #   SubagentStart -> <uuid>.<agent_id>.start   (contents: agent_type)
+    #   SubagentStart -> <uuid>.<agent_id>.start
     #   SubagentStop  -> <uuid>.<agent_id>.stop
     #   anything else -> nothing
     #
@@ -164,13 +215,14 @@ final class HookWatcher {
     if [ ! -t 0 ]; then
         IFS= read -r -t 2 -d '' INPUT 2>/dev/null || true
         # bash 3.2 discards partial input on timeout; with nothing to go on, do nothing
-        # rather than guess (a guessed Stop would wave the head and clear its subagents).
+        # rather than guess (a guessed Stop would wave the head for no reason).
         if [ -z "${INPUT}" ]; then
             exit 0
         fi
     fi
 
     # Extract a top-level string field from the JSON with sed only (no jq/python needed).
+    # Good enough for routing (hook_event_name, agent_id); the app parses the full JSON.
     json_field() {
         printf '%s\\n' "${INPUT}" \\
             | sed -nE 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"([^"]*)".*/\\1/p' \\
@@ -179,31 +231,31 @@ final class HookWatcher {
 
     EVENT="$(json_field hook_event_name)"
 
-    # Writes $2 into "$1" atomically (temp file + rename) so the watcher never reads a partial file.
+    # Writes the raw payload into "$1" atomically (temp file + rename) so the watcher never
+    # reads a partial file. printf is a builtin, so payload size is not limited by ARG_MAX.
     write_marker() {
         TMP="$1.tmp"
-        if printf '%s' "$2" > "${TMP}" 2>/dev/null; then
+        if printf '%s' "${INPUT}" > "${TMP}" 2>/dev/null; then
             mv -f "${TMP}" "$1" 2>/dev/null || rm -f "${TMP}" 2>/dev/null
         fi
     }
 
     case "${EVENT}" in
         SubagentStart|SubagentStop)
-            # Agent ids and types are reduced to a safe character set before touching the filesystem.
+            # Agent ids are reduced to a safe character set before touching the filesystem.
             AGENT_ID="$(json_field agent_id | tr -cd 'A-Za-z0-9_-')"
             if [ -z "${AGENT_ID}" ]; then
                 exit 0
             fi
-            AGENT_TYPE="$(json_field agent_type | tr -cd 'A-Za-z0-9 _:./-' | cut -c1-64)"
             if [ "${EVENT}" = "SubagentStart" ]; then
-                write_marker "${HOOKS_DIR}/${INSTANCE_ID}.${AGENT_ID}.start" "${AGENT_TYPE:-agent}"
+                write_marker "${HOOKS_DIR}/${INSTANCE_ID}.${AGENT_ID}.start"
             else
-                write_marker "${HOOKS_DIR}/${INSTANCE_ID}.${AGENT_ID}.stop" ""
+                write_marker "${HOOKS_DIR}/${INSTANCE_ID}.${AGENT_ID}.stop"
             fi
             ;;
         Stop|"")
             # Stop, or no event name (manual/legacy invocation): task completion.
-            touch "${HOOKS_DIR}/${INSTANCE_ID}.done" 2>/dev/null || true
+            write_marker "${HOOKS_DIR}/${INSTANCE_ID}.done"
             ;;
         *)
             # Some other hook event routed here (Notification, PreToolUse, ...): not ours.
@@ -307,26 +359,37 @@ final class HookWatcher {
                 continue
             }
 
-            // Read the payload (subagent type) before deleting the marker file.
-            let contents: Data? = {
-                if case .subagentStart = marker { return fm.contents(atPath: markerPath) }
-                return nil
-            }()
+            // Read the payload before deleting the marker file.
+            let payload = notify ? HookPayload.parse(fm.contents(atPath: markerPath)) : .empty
             try? fm.removeItem(atPath: markerPath)
 
             guard notify else { continue }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                switch marker {
-                case .taskComplete(let instance):
-                    self.onTaskComplete?(instance)
-                case .subagentStart(let instance, let agentID):
-                    self.onSubagentStart?(instance, agentID, HookMarker.agentType(fromContents: contents))
-                case .subagentStop(let instance, let agentID):
-                    self.onSubagentStop?(instance, agentID)
-                }
+                self.deliver(marker, payload: payload)
             }
+        }
+    }
+
+    /// Fans one marker out to the callbacks. Runs on the main queue.
+    private func deliver(_ marker: HookMarker, payload: HookPayload) {
+        let instance: UUID = {
+            switch marker {
+            case .taskComplete(let instance), .subagentStart(let instance, _), .subagentStop(let instance, _):
+                return instance
+            }
+        }()
+        if let tasks = payload.backgroundTasks {
+            onBackgroundTasks?(instance, tasks)
+        }
+        switch marker {
+        case .taskComplete:
+            onTaskComplete?(instance, payload.backgroundTasks)
+        case .subagentStart(_, let agentID):
+            onSubagentStart?(instance, agentID, payload.agentType, payload.description)
+        case .subagentStop(_, let agentID):
+            onSubagentStop?(instance, agentID)
         }
     }
 
