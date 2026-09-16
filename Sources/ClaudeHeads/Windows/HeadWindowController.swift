@@ -55,7 +55,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 ///
 /// The panel frame is the head window (see `HeadGeometry.windowSize`) inflated by
 /// `contentInset` on every side to leave room for the subagent orbit ring. All the
-/// clamping below reasons about the head circle, not the inflated frame.
+/// clamping below reasons about the head window, not the inflated frame.
 final class DraggablePanel: NSPanel {
     private var dragOrigin: CGPoint = .zero
     private var windowOriginAtDragStart: CGPoint = .zero
@@ -107,22 +107,19 @@ final class DraggablePanel: NSPanel {
         setFrameOrigin(newOrigin)
     }
 
-    /// Clamps a panel origin so the head's circle stays fully inside the visible
-    /// frame of the screen containing `point` (or this panel's screen). The panel
-    /// includes the orbit inset, emoji padding and a label, but only the circle needs
-    /// to stay visible.
+    /// Clamps a panel origin so the full head window (circle, emoji overhang and label)
+    /// stays inside the visible frame of the screen containing `point` (or this panel's
+    /// screen). The transparent orbit inset around it may hang off screen. This is the
+    /// same rule `PositionManager.remapPositions` applies, so a head left at a screen
+    /// edge by a drag is not moved again on relaunch or display change.
     func clampedToScreen(_ origin: CGPoint, near point: CGPoint? = nil) -> CGPoint {
         let screen = point.flatMap { p in NSScreen.screens.first(where: { $0.frame.contains(p) }) }
             ?? self.screen ?? NSScreen.main
         guard let sf = screen?.visibleFrame else { return origin }
-        let g = HeadGeometry.current
         let inset = contentInset
-        var clamped = origin
-        clamped.x = max(sf.minX - inset - g.circleOffsetX,
-                        min(clamped.x, sf.maxX - inset - g.circleOffsetX - g.diameter))
-        clamped.y = max(sf.minY - inset - g.circleBottomY,
-                        min(clamped.y, sf.maxY - inset - g.circleTopY))
-        return clamped
+        let headOrigin = CGPoint(x: origin.x + inset, y: origin.y + inset)
+        let clampedHead = HeadGeometry.current.clampWindowOrigin(headOrigin, in: sf)
+        return CGPoint(x: clampedHead.x - inset, y: clampedHead.y - inset)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -183,6 +180,8 @@ final class HeadWindowController {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .utilityWindow
+        // We own the panel's lifetime; it is freed when this controller drops it in tearDown().
+        panel.isReleasedWhenClosed = false
 
         hostingView = PassthroughHostingView(rootView: OrbitingHeadRootView(head: head))
         hostingView.frame = NSRect(origin: .zero, size: contentRect.size)
@@ -237,12 +236,29 @@ final class HeadWindowController {
         }
     }
 
+    deinit {
+        NSLog("[HeadWindowController] deinit for head \(head.id)")
+    }
+
     func showWindow() {
         panel.orderFront(nil)
     }
 
+    /// Hides the panel without destroying it.
     func close() {
         panel.orderOut(nil)
+    }
+
+    /// Permanently closes the panel and breaks references so everything can deallocate.
+    /// The controller must not be used after this call.
+    func tearDown() {
+        panel.onClicked = nil
+        panel.onDragMoved = nil
+        panel.onDragEnded = nil
+        panel.hitRegion = nil
+        hostingView.hitRegion = nil
+        panel.close()
+        panel.contentView = nil
     }
 
     func bringToFront() {

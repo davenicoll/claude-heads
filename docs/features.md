@@ -10,8 +10,8 @@ This describes what the app does today. Anything not listed here is not implemen
 - Background is a gradient derived deterministically from the full folder path; if `avatarImageData` is present in `state.json` it is drawn instead (there is currently no UI for choosing an avatar)
 - An ASCII face on the head cycles through expressions that follow the session's state (working, idle, finished, errored)
 - Optional coloured status dot (green idle, blue running, orange finished, red errored), off by default
-- Heads can be dragged anywhere; the circle is kept on screen and the position is remembered across launches
-- Multi-monitor aware: when displays change, heads on a vanished screen move to the closest remaining screen and all heads are clamped to visible frames
+- Heads can be dragged anywhere; the head (circle and name label) is kept on screen and the position is remembered across launches
+- Multi-monitor aware: when displays change, heads on a vanished screen move to the closest remaining screen and every head is clamped fully inside its screen's visible frame
 - Magnetic snap: when a drag ends within the snap distance of another head's edge or centre line, the head snaps edge-to-edge. Touching heads are recorded as a snap group. Dragging moves a single head only (groups do not move together)
 
 ## Terminal
@@ -28,7 +28,7 @@ This describes what the app does today. Anything not listed here is not implemen
 - Global Claude Code flags in Settings: `--continue` (with automatic fallback to a fresh session if none exists), `--dangerously-skip-permissions`, `--remote-control`, plus free-form extra arguments (split shell-style: quote arguments that contain spaces, backslash escapes); all are applied to every new session
 - Sessions persist: on relaunch the app re-spawns `claude` for every saved head
 - Shutdown: on quit, `shutdown()` saves state and calls `killAll`, which sends `SIGHUP` to every child process group, waits up to 2s, then `SIGKILL`s and reaps whatever is left before the app terminates. Removing a head while the app is running uses `killProcess` (`SIGHUP`, then `SIGKILL` after 2s)
-- When a process exits the head shows a finished state, waves, closes its terminal and disappears after 10 seconds
+- When a process exits the head shows a finished state, waves, closes its terminal and disappears after 10 seconds. Clicking the head before then relaunches `claude` and cancels the removal
 
 ## Wave Animation
 

@@ -85,8 +85,11 @@ final class PositionManager {
 
     /// Remaps head positions after a display configuration change. If a head's screen is no
     /// longer available, it is moved to the nearest edge of the closest remaining screen.
-    /// All positions are clamped to be within screen visible frames.
-    func remapPositions(_ heads: inout [HeadInstance]) {
+    /// All positions are clamped so the full head window rect stays within its screen's visible frame.
+    func remapPositions(
+        _ heads: inout [HeadInstance],
+        headSize: NSSize = HeadGeometry.current.windowSize
+    ) {
         let screens = NSScreen.screens
         guard !screens.isEmpty else { return }
 
@@ -102,11 +105,11 @@ final class PositionManager {
                 let frame = closestScreen.visibleFrame
 
                 head.screenID = screenIDForScreen(closestScreen)
-                head.position = clampPosition(head.position, to: frame)
+                head.position = clampPosition(head.position, size: headSize, to: frame)
             } else {
                 // Screen still exists -- just clamp to its current visible frame
                 if let screen = screenForID(head.screenID, screens: screens) {
-                    head.position = clampPosition(head.position, to: screen.visibleFrame)
+                    head.position = clampPosition(head.position, size: headSize, to: screen.visibleFrame)
                 }
             }
         }
@@ -153,12 +156,10 @@ final class PositionManager {
         return bestScreen
     }
 
-    /// Clamps a point to be within the given rectangle.
-    private func clampPosition(_ point: CGPoint, to rect: NSRect) -> CGPoint {
-        CGPoint(
-            x: max(rect.minX, min(point.x, rect.maxX)),
-            y: max(rect.minY, min(point.y, rect.maxY))
-        )
+    /// Clamps a window origin so the whole `size`-sized rect anchored at it stays inside `rect`.
+    /// Same rule as `DraggablePanel.clampedToScreen`, via `HeadGeometry.clampOrigin`.
+    func clampPosition(_ point: CGPoint, size: NSSize, to rect: NSRect) -> CGPoint {
+        HeadGeometry.clampOrigin(point, size: size, in: rect)
     }
 
     /// Extracts the display ID from an NSScreen.

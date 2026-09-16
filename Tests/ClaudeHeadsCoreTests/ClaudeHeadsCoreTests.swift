@@ -541,3 +541,46 @@ final class SnapEngineIntegrationTests: XCTestCase {
         }
     }
 }
+
+// MARK: - PositionManager Clamp Tests
+
+final class PositionManagerClampTests: XCTestCase {
+
+    let manager = PositionManager.shared
+    let screen = NSRect(x: 0, y: 0, width: 1000, height: 800)
+    let size = NSSize(width: 100, height: 120)
+
+    func testPointInsideIsUnchanged() {
+        let p = manager.clampPosition(CGPoint(x: 300, y: 300), size: size, to: screen)
+        XCTAssertEqual(p, CGPoint(x: 300, y: 300))
+    }
+
+    func testFullRectKeptInsideRightAndTopEdges() {
+        // Origin is on-screen but the rect would hang off the right/top edges.
+        let p = manager.clampPosition(CGPoint(x: 990, y: 790), size: size, to: screen)
+        XCTAssertEqual(p.x, screen.maxX - size.width, accuracy: 0.001)
+        XCTAssertEqual(p.y, screen.maxY - size.height, accuracy: 0.001)
+    }
+
+    func testClampsToLeftAndBottomEdges() {
+        let p = manager.clampPosition(CGPoint(x: -50, y: -50), size: size, to: screen)
+        XCTAssertEqual(p, CGPoint(x: 0, y: 0))
+    }
+
+    func testOversizedRectPinsToMinEdge() {
+        let huge = NSSize(width: 2000, height: 2000)
+        let p = manager.clampPosition(CGPoint(x: 500, y: 500), size: huge, to: screen)
+        XCTAssertEqual(p, CGPoint(x: screen.minX, y: screen.minY))
+    }
+
+    func testHeadGeometryClampUsesFullWindowSize() {
+        // The remap clamp and the drag clamp share this rule: the whole head window
+        // (circle + emoji overhang + label) must stay inside the screen.
+        let g = HeadGeometry(diameter: 80)
+        let p = g.clampWindowOrigin(CGPoint(x: 990, y: 790), in: screen)
+        XCTAssertEqual(p.x, screen.maxX - g.windowSize.width, accuracy: 0.001)
+        XCTAssertEqual(p.y, screen.maxY - g.windowSize.height, accuracy: 0.001)
+        XCTAssertEqual(
+            manager.clampPosition(CGPoint(x: 990, y: 790), size: g.windowSize, to: screen), p)
+    }
+}

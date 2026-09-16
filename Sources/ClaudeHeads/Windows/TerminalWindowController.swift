@@ -128,8 +128,23 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
         panel.makeFirstResponder(terminalView)
     }
 
+    /// Hides the panel without destroying it.
     func close() {
         panel.orderOut(nil)
+    }
+
+    /// Permanently closes the panel and detaches the terminal view so the panel, this
+    /// controller and the SwiftTerm view can deallocate. Not usable after this call.
+    func tearDown() {
+        panel.delegate = nil
+        panel.close()
+        terminalView.removeFromSuperview()
+        panel.contentView = nil
+        bridge = nil
+    }
+
+    deinit {
+        NSLog("[TerminalWindowController] deinit for head \(head.id)")
     }
 
     func applyFont() {
@@ -178,9 +193,11 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
     /// 3. For each candidate, check it doesn't overlap any obstacle rect
     /// 4. If all candidates collide, nudge the best one until clear
     func repositionNearHead(avoiding obstacles: [NSRect]) {
-        let screen = NSScreen.screens.first(where: {
+        // Prefer the screen containing the head, then the main screen, then any screen.
+        // With no screens at all (e.g. display sleep) there is nothing to position against.
+        guard let screen = NSScreen.screens.first(where: {
             $0.frame.contains(NSPoint(x: head.position.x + 30, y: head.position.y + 30))
-        }) ?? NSScreen.main ?? NSScreen.screens[0]
+        }) ?? NSScreen.main ?? NSScreen.screens.first else { return }
 
         let sf = screen.visibleFrame
         let cr = fullHeadRect()
@@ -285,10 +302,7 @@ final class TerminalWindowController: NSObject, NSWindowDelegate {
         }
 
         // Final fallback: use the toward-center direction, clamped, accept possible overlap
-        if bestOrigin == nil {
-            bestOrigin = clamp(originFor(prioritized[0]))
-        }
-
-        panel.setFrameOrigin(bestOrigin!)
+        let finalOrigin = bestOrigin ?? clamp(originFor(prioritized.first ?? .below))
+        panel.setFrameOrigin(finalOrigin)
     }
 }
