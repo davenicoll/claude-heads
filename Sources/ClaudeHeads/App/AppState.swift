@@ -30,8 +30,19 @@ public final class AppState {
         }
 
         // Wire up process exit — show wave animation, then remove after delay
-        processManager.onProcessExit = { [weak self] pid, _ in
-            self?.handleProcessExit(pid: pid)
+        processManager.onProcessExit = { [weak self] pid, exitCode in
+            self?.handleProcessExit(pid: pid, exitCode: exitCode)
+        }
+
+        // Make sure every claude child is stopped and state is saved no matter how the app is
+        // asked to quit (Cmd-Q, logout, AppleScript, ...), not only via the menu-bar Quit button.
+        // shutdown() is idempotent so running it twice on the menu path is harmless.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.shutdown()
         }
 
         // Wire up PTY activity — mark head as running when output flows
@@ -88,12 +99,7 @@ public final class AppState {
         termController.bridge = bridge
         terminalControllers[head.id] = termController
 
-        let pid = processManager.spawnProcess(
-            folderPath: folderPath,
-            extraArgs: extraArgs,
-            terminalView: terminalView,
-            bridge: bridge
-        )
+        let pid = processManager.spawnProcess(head: head, terminalView: terminalView, bridge: bridge)
         if pid > 0 {
             head.processID = pid
             head.state = .running
@@ -318,14 +324,23 @@ public final class AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
     }
 
-    private func handleProcessExit(pid: pid_t) {
+    private func handleProcessExit(pid: pid_t, exitCode: Int32) {
         guard let head = heads.first(where: { $0.processID == pid }) else { return }
+
+        idleTimers[head.id]?.cancel()
+        idleTimers.removeValue(forKey: head.id)
+
+        // 126/127 mean claude never actually started (chdir or exec failed). Leave the head and
+        // its terminal in place, marked errored, so the diagnostic written to the PTY is visible.
+        if exitCode == ProcessManager.exitCodeChdirFailed || exitCode == ProcessManager.exitCodeExecFailed {
+            head.processID = nil
+            head.state = .errored
+            return
+        }
 
         // Show finished state with wave animation
         head.state = .finished
         head.isWaving = true
-        idleTimers[head.id]?.cancel()
-        idleTimers.removeValue(forKey: head.id)
 
         // Close the terminal window
         terminalControllers[head.id]?.close()
@@ -365,12 +380,7 @@ public final class AppState {
             terminalControllers[head.id] = termController
 
             // Start the claude process immediately on restore
-            let pid = processManager.spawnProcess(
-                folderPath: head.folderPath,
-                extraArgs: head.extraArgs,
-                terminalView: terminalView,
-                bridge: bridge
-            )
+            let pid = processManager.spawnProcess(head: head, terminalView: terminalView, bridge: bridge)
             if pid > 0 {
                 head.processID = pid
                 head.state = .running
@@ -396,8 +406,7 @@ public final class AppState {
               let bridge = termController.bridge else { return }
 
         let pid = processManager.spawnProcess(
-            folderPath: head.folderPath,
-            extraArgs: head.extraArgs,
+            head: head,
             terminalView: termController.terminalView,
             bridge: bridge
         )
@@ -416,9 +425,11 @@ public final class AppState {
         try? data.write(to: Self.stateFileURL, options: .atomic)
     }
 
+    /// Synchronously stops every claude process (SIGHUP, ~2s grace, then SIGKILL) and persists
+    /// state. Blocks until all children are reaped so it is safe to call before terminating.
     public func shutdown() {
-        processManager.killAll()
         saveState()
+        processManager.killAll(timeout: 2.0)
     }
 
     // MARK: - Private Helpers
