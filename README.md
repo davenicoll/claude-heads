@@ -22,22 +22,47 @@ Each head shows the folder name it was launched in, with an auto-generated color
 
 ## Build
 
+For a quick development build:
+
 ```bash
 swift build
 ```
 
+To produce a proper app bundle (release build, `Info.plist`, app icon, SwiftPM
+resource bundles, ad-hoc code signature):
+
+```bash
+./scripts/bundle.sh
+```
+
+This writes `dist/ClaudeHeads.app`. The script is idempotent; re-running it
+rebuilds and replaces the bundle. The bundle is ad-hoc signed so it launches
+locally without Gatekeeper complaints, but it is not notarized, so it is not
+suitable for distributing to other machines as-is. It is also built for the
+host architecture only (Apple silicon or Intel, whichever ran the script).
+
 ## Run
+
+For development:
 
 ```bash
 swift run ClaudeHeads
 ```
 
-Or build a release and copy the binary:
+Note that `swift run` launches a bare executable, not an app bundle, so macOS
+stores its preferences under the executable name (`ClaudeHeads`) rather than the
+bundle identifier (`com.davenicoll.claude-heads`). Settings saved this way will
+not carry over to the bundled app.
+
+To run the bundled app:
 
 ```bash
-swift build -c release
-cp .build/release/ClaudeHeads /usr/local/bin/
+./scripts/bundle.sh
+open dist/ClaudeHeads.app
 ```
+
+Or drag `dist/ClaudeHeads.app` into `/Applications`. The app is a menu bar
+agent (`LSUIElement`), so it has no Dock icon; look for it in the menu bar.
 
 ## Hook Setup
 

@@ -8,3 +8,4 @@ DerivedData/
 *.dSYM
 *.ipa
 .claude-heads/
+dist/
