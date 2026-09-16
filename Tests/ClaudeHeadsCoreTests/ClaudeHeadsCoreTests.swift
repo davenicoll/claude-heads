@@ -361,6 +361,7 @@ final class StoredSettingsTests: XCTestCase {
         """
         let stored = try JSONDecoder().decode(StoredSettings.self, from: Data(legacy.utf8))
         XCTAssertNil(stored.showSubagentChildren, "missing key must decode as nil, not fail or default here")
+        XCTAssertNil(stored.manageClaudeHooks, "missing key must decode as nil; AppSettings.load() defaults it to true")
         XCTAssertEqual(stored.showStatusIndicator, true)
     }
 
@@ -368,12 +369,13 @@ final class StoredSettingsTests: XCTestCase {
         let stored = StoredSettings(
             defaultExtraArgs: "", terminalFontName: "Menlo", terminalFontSize: 12,
             headSize: .large, snapDistance: 60, launchAtLogin: false,
-            showStatusIndicator: false, showSubagentChildren: false,
+            showStatusIndicator: false, showSubagentChildren: false, manageClaudeHooks: false,
             claudeContinue: true, claudeSkipPermissions: false, claudeRemoteControl: false
         )
         let data = try JSONEncoder().encode(stored)
         let decoded = try JSONDecoder().decode(StoredSettings.self, from: data)
         XCTAssertEqual(decoded.showSubagentChildren, false)
+        XCTAssertEqual(decoded.manageClaudeHooks, false)
     }
 }
 

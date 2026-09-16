@@ -34,9 +34,18 @@ This describes what the app does today. Anything not listed here is not implemen
 
 - The head waves when Claude goes quiet after at least 5 seconds of continuous output (a task finishing), and when the process exits
 - Clicking the waving head dismisses the wave and opens the terminal
-- With the Claude Code `Stop` hook configured (see the README Hook Setup section), `HookWatcher` picks up the `<uuid>.done` marker and the head goes idle and waves immediately, overriding the output-idle heuristic
+- With the Claude Code `Stop` hook configured, `HookWatcher` picks up the `<uuid>.done` marker and the head goes idle and waves immediately, overriding the output-idle heuristic. The app installs that hook (and the two subagent hooks below) into `~/.claude/settings.json` itself on launch and removes them on quit; see Hooks
 - With the `SubagentStart`/`SubagentStop` hooks configured, `HookWatcher` also picks up `<uuid>.<agent_id>.start`/`.stop` markers and each running subagent is drawn as a small head orbiting its parent (35% of the parent head's diameter, so it follows the head size setting; coloured by agent type, hover for the type); they disappear when the subagent stops or the parent's Stop fires
 - "Show children for subagents" (Settings, on by default) hides the orbit: the ring is not drawn or animated, the head panel shrinks back to the plain head, and only the parent head is clickable. Subagents are still tracked while hidden, so turning it back on shows the ones currently running
+
+## Hooks
+
+- `HookInstaller` adds `Stop`, `SubagentStart` and `SubagentStop` entries running `~/.claude-heads/hooks/notify.sh` (absolute path) to the global `~/.claude/settings.json` at launch and removes exactly those entries on quit, while "Install Claude Code hooks while running" is on (default)
+- The edit is a minimal splice that keeps the rest of the file byte-identical (key order, indentation, line endings); install then quit returns the file to its original bytes. Other hooks and settings are never touched
+- A one-time backup `settings.json.claude-heads.bak` is written before the first modification; writes are atomic and follow symlinks; a missing file is created with just the hooks block
+- Invalid JSON, a non-object `hooks`, or a result that would not parse or would change anything else means nothing is written and Settings shows "Could not update settings.json: <reason>"
+- Hooks apply to `claude` sessions started after the write, so the app's own (freshly spawned) heads always see them. After a crash the entries remain harmlessly (`notify.sh` exits 0 without `CLAUDE_INSTANCE_ID`) and the next launch is idempotent
+- Settings shows the state ("Installed", "Missing: ...", or the error) and a "Reinstall hooks" button that replaces stale `notify.sh` entries with fresh ones regardless of the toggle; turning the toggle off removes the entries immediately
 
 ## Settings
 
@@ -44,6 +53,7 @@ This describes what the app does today. Anything not listed here is not implemen
 - Snap distance (20-120pt)
 - Show/hide status indicator
 - Show/hide children for subagents (the orbit ring), applied live
+- Install Claude Code hooks while running (on/off), hook status and "Reinstall hooks"
 - Terminal font family (monospace fonts only) and size, applied live to open terminals
 - Claude Code flags and extra arguments
 - Menu bar icon lists all heads (click to bring one to the front), New Head, Settings, Quit; the app has no Dock icon

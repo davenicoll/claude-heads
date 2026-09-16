@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     private var settings = AppSettings.shared
+    private var hookInstaller = HookInstaller.shared
     @State private var monoFonts: [String] = []
 
     var body: some View {
@@ -30,6 +31,22 @@ struct SettingsView: View {
 
                 Toggle("Show status indicator", isOn: Bindable(settings).showStatusIndicator)
                 Toggle("Show children for subagents", isOn: Bindable(settings).showSubagentChildren)
+
+                Toggle("Install Claude Code hooks while running", isOn: Bindable(settings).manageClaudeHooks)
+
+                HStack {
+                    Text("Claude Code hooks")
+                    Spacer()
+                    Text(hookInstaller.status.label)
+                        .foregroundStyle(hookStatusColor)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                    Button("Reinstall hooks") {
+                        hookInstaller.reinstall()
+                    }
+                    .controlSize(.small)
+                }
             }
 
             Section("Terminal") {
@@ -88,6 +105,16 @@ struct SettingsView: View {
         .frame(width: 480, height: 720)
         .onAppear {
             monoFonts = findMonospaceFonts()
+            hookInstaller.refreshStatus()
+        }
+        .onChange(of: settings.manageClaudeHooks) { _, enabled in
+            // The hooks live in settings.json only while managed: turning the toggle off
+            // removes them straight away, turning it on puts them back.
+            if enabled {
+                hookInstaller.install()
+            } else {
+                hookInstaller.uninstall()
+            }
         }
         .onChange(of: settings.terminalFontName) {
             NotificationCenter.default.post(name: .terminalFontChanged, object: nil)
@@ -101,6 +128,14 @@ struct SettingsView: View {
         .onChange(of: settings.showSubagentChildren) {
             // The head panel is only enlarged for the orbit ring while children are shown.
             NotificationCenter.default.post(name: .subagentChildrenVisibilityChanged, object: nil)
+        }
+    }
+
+    private var hookStatusColor: Color {
+        switch hookInstaller.status {
+        case .installed: .secondary
+        case .missing: .orange
+        case .failed: .red
         }
     }
 

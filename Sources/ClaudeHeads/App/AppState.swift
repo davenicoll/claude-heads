@@ -16,12 +16,19 @@ public final class AppState {
     let positionManager = PositionManager.shared
     /// Watches ~/.claude-heads/hooks for `.done` markers written by the Claude Code Stop hook.
     let hookWatcher = HookWatcher()
+    /// Installs the hooks that write those markers into ~/.claude/settings.json while the
+    /// app runs. Created after `hookWatcher` so notify.sh exists before it is referenced.
+    let hookInstaller = HookInstaller.shared
 
     private var fontObservation: NSKeyValueObservation?
 
     private static var stateFileURL: URL { Constants.stateFilePath }
 
     public init() {
+        if settings.manageClaudeHooks {
+            hookInstaller.install()
+        }
+
         restoreHeads()
 
         // Wire up screen change notifications
@@ -498,11 +505,15 @@ public final class AppState {
         try? data.write(to: Self.stateFileURL, options: .atomic)
     }
 
-    /// Synchronously stops every claude process (SIGHUP, ~2s grace, then SIGKILL) and persists
-    /// state. Blocks until all children are reaped so it is safe to call before terminating.
+    /// Synchronously stops every claude process (SIGHUP, ~2s grace, then SIGKILL), persists
+    /// state and removes our hooks from ~/.claude/settings.json. Blocks until all children
+    /// are reaped so it is safe to call before terminating. Idempotent.
     public func shutdown() {
         saveState()
         processManager.killAll(timeout: 2.0)
+        if settings.manageClaudeHooks {
+            hookInstaller.uninstall()
+        }
     }
 
     // MARK: - Private Helpers

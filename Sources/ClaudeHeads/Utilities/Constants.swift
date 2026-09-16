@@ -23,6 +23,14 @@ enum Constants {
     static let hooksDirectory: URL = {
         claudeHeadsDirectory.appendingPathComponent("hooks", isDirectory: true)
     }()
+
+    /// Claude Code's global (user-level) settings file, where `HookInstaller` manages the
+    /// `hooks` entries. Never a project-level `.claude/settings.json`.
+    static let claudeSettingsFile: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("settings.json")
+    }()
 }
 
 // MARK: - HeadGeometry
