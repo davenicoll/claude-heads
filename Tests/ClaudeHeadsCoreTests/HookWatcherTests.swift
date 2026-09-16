@@ -182,4 +182,48 @@ final class HookWatcherTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath(staleID.uuidString)),
                        "Stale marker should still be cleaned up")
     }
+
+    func testNonUUIDMarkersAreIgnoredButCleanedUp() throws {
+        let watcher = HookWatcher(hooksDirectory: tempDir)
+
+        let notCalled = expectation(description: "non-UUID marker must not be delivered")
+        notCalled.isInverted = true
+        watcher.onTaskComplete = { _ in notCalled.fulfill() }
+
+        let bogus = tempDir.appendingPathComponent("not-a-uuid.done").path
+        let wrongSuffix = tempDir.appendingPathComponent("\(UUID().uuidString).txt").path
+        FileManager.default.createFile(atPath: bogus, contents: nil)
+        FileManager.default.createFile(atPath: wrongSuffix, contents: nil)
+
+        wait(for: [notCalled], timeout: 1.0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bogus), "Malformed .done markers are swept")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: wrongSuffix), "Files without .done are left alone")
+    }
+
+    func testEachMarkerIsDeliveredExactlyOnce() throws {
+        let watcher = HookWatcher(hooksDirectory: tempDir)
+        let ids = [UUID(), UUID(), UUID()]
+
+        let received = expectation(description: "three markers delivered")
+        received.expectedFulfillmentCount = ids.count
+        var delivered: [UUID] = []
+        watcher.onTaskComplete = { uuid in
+            delivered.append(uuid)
+            received.fulfill()
+        }
+
+        for id in ids {
+            FileManager.default.createFile(atPath: markerPath(id.uuidString), contents: nil)
+        }
+
+        wait(for: [received], timeout: 5.0)
+        XCTAssertEqual(Set(delivered), Set(ids))
+        XCTAssertEqual(delivered.count, ids.count, "No duplicate deliveries")
+
+        // Nothing further arrives once the markers have been consumed.
+        let quiet = expectation(description: "no further deliveries")
+        quiet.isInverted = true
+        watcher.onTaskComplete = { _ in quiet.fulfill() }
+        wait(for: [quiet], timeout: 0.5)
+    }
 }

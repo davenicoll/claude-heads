@@ -3,6 +3,19 @@ import XCTest
 
 @testable import ClaudeHeadsCore
 
+/// Collects PTY output on the main queue; calls `onBytes` for every chunk received.
+private final class CapturingSink: TerminalOutputSink {
+    private(set) var received: [UInt8] = []
+    var onBytes: (() -> Void)?
+
+    func feed(byteArray: ArraySlice<UInt8>) {
+        received.append(contentsOf: byteArray)
+        onBytes?()
+    }
+
+    var text: String { String(decoding: received, as: UTF8.self) }
+}
+
 final class ProcessManagerTests: XCTestCase {
 
     private var tempHome: URL!
@@ -269,5 +282,81 @@ final class ProcessManagerTests: XCTestCase {
 
         let output = try? String(contentsOfFile: outFile, encoding: .utf8)
         XCTAssertEqual(output, "\(tricky)\nABC-123\n")
+    }
+
+    // MARK: PTY round trip
+
+    func testPTYRoundTripThroughCatAndEOFExit() throws {
+        let manager = ProcessManager()
+        let sink = CapturingSink()
+
+        let exited = expectation(description: "onProcessExit")
+        var exitCode: Int32?
+        manager.onProcessExit = { _, code in
+            exitCode = code
+            exited.fulfill()
+        }
+        var activityPIDs: [pid_t] = []
+        manager.onProcessActivity = { activityPIDs.append($0) }
+
+        let pid = manager.spawn(
+            executable: "/bin/cat",
+            arguments: ["cat"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            cwd: "/",
+            terminalView: nil,
+            bridge: nil,
+            output: sink
+        )
+        XCTAssertGreaterThan(pid, 0)
+        let session = try XCTUnwrap(manager.session(for: pid))
+
+        // The PTY line discipline echoes input and cat writes it back, so the payload must show
+        // up at least twice in the output; waiting for the second copy proves cat itself ran.
+        let payload = "round-trip-\(UUID().uuidString)"
+        let echoed = expectation(description: "payload read back from the PTY")
+        sink.onBytes = {
+            if sink.text.components(separatedBy: payload).count - 1 >= 2 {
+                echoed.fulfill()
+                sink.onBytes = nil
+            }
+        }
+        session.write(Array((payload + "\n").utf8))
+        wait(for: [echoed], timeout: 5.0)
+
+        XCTAssertTrue(manager.isProcessRunning(pid: pid))
+        XCTAssertFalse(activityPIDs.isEmpty)
+        XCTAssertTrue(activityPIDs.allSatisfy { $0 == pid })
+
+        // Ctrl-D at the start of a line delivers EOF to cat, which exits 0.
+        session.write([0x04])
+        wait(for: [exited], timeout: 5.0)
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertNil(manager.session(for: pid))
+        XCTAssertFalse(manager.isProcessRunning(pid: pid))
+        XCTAssertTrue(session.isReaped)
+
+        var status: Int32 = 0
+        XCTAssertEqual(waitpid(pid, &status, WNOHANG), -1, "Child must already be reaped (no zombie)")
+        XCTAssertEqual(errno, ECHILD)
+    }
+
+    func testWriteAfterExitIsIgnored() throws {
+        let manager = ProcessManager()
+        let exited = expectation(description: "onProcessExit")
+        manager.onProcessExit = { _, _ in exited.fulfill() }
+
+        let pid = spawnShell(manager, "exit 0")
+        let session = try XCTUnwrap(manager.session(for: pid))
+        wait(for: [exited], timeout: 5.0)
+
+        // Must not crash or touch the closed fd.
+        session.write(Array("late\n".utf8))
+        session.resize(cols: 100, rows: 40)
+        let settle = expectation(description: "settle")
+        session.queue.async { settle.fulfill() }
+        wait(for: [settle], timeout: 2.0)
+        XCTAssertTrue(session.isClosed)
     }
 }

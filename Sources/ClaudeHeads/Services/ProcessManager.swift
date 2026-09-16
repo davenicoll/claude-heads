@@ -3,6 +3,16 @@ import Darwin
 import Foundation
 import SwiftTerm
 
+// MARK: - TerminalOutputSink
+
+/// Receives raw bytes read from a PTY. `TerminalView` conforms directly; tests supply a stub so
+/// the PTY read path can be exercised without a GUI.
+protocol TerminalOutputSink: AnyObject {
+    func feed(byteArray: ArraySlice<UInt8>)
+}
+
+extension TerminalView: TerminalOutputSink {}
+
 // MARK: - PTYSession
 
 /// Owns the master side of a PTY and the child process attached to it.
@@ -15,7 +25,7 @@ final class PTYSession {
     let masterFD: Int32
     let queue: DispatchQueue
 
-    weak var terminalView: TerminalView?
+    weak var output: TerminalOutputSink?
 
     /// Set once the fd is scheduled for close. Guarded by `stateLock`.
     private var _isClosed = false
@@ -29,10 +39,10 @@ final class PTYSession {
     /// giving up, so a stopped child can never wedge the session queue (and thus `killAll`).
     static let writeTimeout: TimeInterval = 1.0
 
-    init(pid: pid_t, masterFD: Int32, terminalView: TerminalView?) {
+    init(pid: pid_t, masterFD: Int32, output: TerminalOutputSink?) {
         self.pid = pid
         self.masterFD = masterFD
-        self.terminalView = terminalView
+        self.output = output
         self.queue = DispatchQueue(label: "com.claudeheads.pty.\(pid)", qos: .userInteractive)
     }
 
@@ -187,7 +197,8 @@ final class ProcessManager {
     /// Forks a child attached to a new PTY and execs `executable` with the given argv/env.
     ///
     /// `arguments` must include argv[0]. This is the seam used by `spawnProcess` and by tests;
-    /// the terminal view and bridge are optional so children can be driven headlessly.
+    /// the terminal view and bridge are optional so children can be driven headlessly. PTY output
+    /// is delivered to `output` when given, otherwise to `terminalView`.
     ///
     /// - Returns: The child PID, or -1 on failure.
     @discardableResult
@@ -197,7 +208,8 @@ final class ProcessManager {
         environment: [String: String],
         cwd: String,
         terminalView: TerminalView?,
-        bridge: TerminalBridge?
+        bridge: TerminalBridge?,
+        output: TerminalOutputSink? = nil
     ) -> pid_t {
         let envp = environment.map { "\($0.key)=\($0.value)" }.sorted()
 
@@ -254,7 +266,7 @@ final class ProcessManager {
             _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
         }
 
-        let session = PTYSession(pid: childPID, masterFD: masterFD, terminalView: terminalView)
+        let session = PTYSession(pid: childPID, masterFD: masterFD, output: output ?? terminalView)
         bridge?.session = session
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: session.queue)
@@ -292,8 +304,8 @@ final class ProcessManager {
             let n = read(session.masterFD, &buffer, buffer.count)
             if n > 0 {
                 let data = Array(buffer[0..<n])
-                DispatchQueue.main.async { [weak self, weak view = session.terminalView] in
-                    view?.feed(byteArray: ArraySlice(data))
+                DispatchQueue.main.async { [weak self, weak sink = session.output] in
+                    sink?.feed(byteArray: ArraySlice(data))
                     self?.onProcessActivity?(pid)
                 }
                 continue

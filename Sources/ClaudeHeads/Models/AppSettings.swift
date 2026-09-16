@@ -65,14 +65,27 @@ final class AppSettings {
 
     /// Builds the CLI arguments from settings flags + extra args
     var effectiveCLIArgs: [String] {
+        Self.cliArguments(
+            continue: claudeContinue,
+            skipPermissions: claudeSkipPermissions,
+            remoteControl: claudeRemoteControl,
+            extraArgs: defaultExtraArgs
+        )
+    }
+
+    /// Pure form of `effectiveCLIArgs`. `extraArgs` is split like a shell command line, so
+    /// quoted arguments containing spaces survive as single argv entries.
+    static func cliArguments(
+        continue wantsContinue: Bool,
+        skipPermissions: Bool,
+        remoteControl: Bool,
+        extraArgs: String
+    ) -> [String] {
         var args: [String] = []
-        if claudeContinue { args.append("--continue") }
-        if claudeSkipPermissions { args.append("--dangerously-skip-permissions") }
-        if claudeRemoteControl { args.append("--remote-control") }
-        let extra = defaultExtraArgs.trimmingCharacters(in: .whitespaces)
-        if !extra.isEmpty {
-            args.append(contentsOf: extra.components(separatedBy: .whitespaces).filter { !$0.isEmpty })
-        }
+        if wantsContinue { args.append("--continue") }
+        if skipPermissions { args.append("--dangerously-skip-permissions") }
+        if remoteControl { args.append("--remote-control") }
+        args.append(contentsOf: ShellWords.split(extraArgs))
         return args
     }
 
@@ -144,4 +157,65 @@ private struct StoredSettings: Codable {
     let claudeContinue: Bool?
     let claudeSkipPermissions: Bool?
     let claudeRemoteControl: Bool?
+}
+
+// MARK: - ShellWords
+
+/// Minimal POSIX-style word splitter for the "extra arguments" text field.
+///
+/// Supports whitespace separation, single quotes (literal), double quotes (with `\` escaping
+/// `"`, `\`, `$` and backtick), and backslash escapes outside quotes. No expansion is performed.
+/// An unterminated quote runs to the end of the string rather than being an error.
+enum ShellWords {
+    static func split(_ input: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var inWord = false
+        var iterator = input.makeIterator()
+
+        while let ch = iterator.next() {
+            switch ch {
+            case " ", "\t", "\n", "\r":
+                if inWord {
+                    words.append(current)
+                    current = ""
+                    inWord = false
+                }
+            case "\\":
+                inWord = true
+                if let next = iterator.next(), next != "\n" {
+                    current.append(next)
+                }
+            case "'":
+                inWord = true
+                while let next = iterator.next(), next != "'" {
+                    current.append(next)
+                }
+            case "\"":
+                inWord = true
+                while let next = iterator.next(), next != "\"" {
+                    guard next == "\\" else {
+                        current.append(next)
+                        continue
+                    }
+                    guard let escaped = iterator.next() else { break }
+                    switch escaped {
+                    case "\"", "\\", "$", "`":
+                        current.append(escaped)
+                    case "\n":
+                        break
+                    default:
+                        current.append("\\")
+                        current.append(escaped)
+                    }
+                }
+            default:
+                inWord = true
+                current.append(ch)
+            }
+        }
+
+        if inWord { words.append(current) }
+        return words
+    }
 }
