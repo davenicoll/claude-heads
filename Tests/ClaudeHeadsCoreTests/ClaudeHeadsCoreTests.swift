@@ -361,7 +361,6 @@ final class StoredSettingsTests: XCTestCase {
         """
         let stored = try JSONDecoder().decode(StoredSettings.self, from: Data(legacy.utf8))
         XCTAssertNil(stored.showSubagentChildren, "missing key must decode as nil, not fail or default here")
-        XCTAssertNil(stored.manageClaudeHooks, "missing key must decode as nil; AppSettings.load() defaults it to true")
         XCTAssertEqual(stored.showStatusIndicator, true)
     }
 
@@ -369,13 +368,26 @@ final class StoredSettingsTests: XCTestCase {
         let stored = StoredSettings(
             defaultExtraArgs: "", terminalFontName: "Menlo", terminalFontSize: 12,
             headSize: .large, snapDistance: 60, launchAtLogin: false,
-            showStatusIndicator: false, showSubagentChildren: false, manageClaudeHooks: false,
+            showStatusIndicator: false, showSubagentChildren: false,
             claudeContinue: true, claudeSkipPermissions: false, claudeRemoteControl: false
         )
         let data = try JSONEncoder().encode(stored)
         let decoded = try JSONDecoder().decode(StoredSettings.self, from: data)
         XCTAssertEqual(decoded.showSubagentChildren, false)
-        XCTAssertEqual(decoded.manageClaudeHooks, false)
+    }
+
+    /// Builds up to #12 persisted a `manageClaudeHooks` toggle that no longer exists. The
+    /// synthesized decoder ignores keys it does not know, so that JSON must still decode.
+    func testIgnoresStaleManageClaudeHooksKey() throws {
+        let stale = """
+        {"defaultExtraArgs":"","terminalFontName":"Menlo","terminalFontSize":12,
+         "headSize":"medium","snapDistance":60,"launchAtLogin":false,
+         "showStatusIndicator":false,"showSubagentChildren":true,"manageClaudeHooks":false,
+         "claudeContinue":true,"claudeSkipPermissions":false,"claudeRemoteControl":false}
+        """
+        let stored = try JSONDecoder().decode(StoredSettings.self, from: Data(stale.utf8))
+        XCTAssertEqual(stored.showSubagentChildren, true)
+        XCTAssertEqual(stored.claudeContinue, true)
     }
 }
 

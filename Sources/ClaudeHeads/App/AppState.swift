@@ -25,9 +25,9 @@ public final class AppState {
     private static var stateFileURL: URL { Constants.stateFilePath }
 
     public init() {
-        if settings.manageClaudeHooks {
-            hookInstaller.install()
-        }
+        // The Stop/SubagentStart/SubagentStop hooks are always installed while the app runs
+        // and removed again in shutdown(); there is no setting for it.
+        hookInstaller.install()
 
         restoreHeads()
 
@@ -195,10 +195,14 @@ public final class AppState {
 
         let settingsView = SettingsView()
         let controller = NSHostingController(rootView: settingsView)
+        // SettingsView fixes its width and sizes its height to the form's content, so the
+        // whole form is visible without a scroll bar. The window takes that size up front
+        // and follows it afterwards (e.g. when the hook status row wraps to two lines).
+        controller.sizingOptions = [.preferredContentSize]
         let window = NSWindow(contentViewController: controller)
         window.title = "Claude Heads Settings"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 720))
+        window.setContentSize(controller.view.fittingSize)
         window.center()
         window.level = .floating
         window.makeKeyAndOrderFront(nil)
@@ -511,9 +515,7 @@ public final class AppState {
     public func shutdown() {
         saveState()
         processManager.killAll(timeout: 2.0)
-        if settings.manageClaudeHooks {
-            hookInstaller.uninstall()
-        }
+        hookInstaller.uninstall()
     }
 
     // MARK: - Private Helpers

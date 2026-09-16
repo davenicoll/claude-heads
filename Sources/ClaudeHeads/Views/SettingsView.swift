@@ -6,6 +6,16 @@ struct SettingsView: View {
     @State private var monoFonts: [String] = []
 
     var body: some View {
+        // Fixed width, but the height follows the content: a grouped Form is a scroll view,
+        // so giving it a fixed height that is shorter than its rows shows a scroll bar.
+        // `fixedSize` makes it report its ideal height (all sections fully laid out) and
+        // `AppState.showSettings()` sizes the window to that.
+        form
+            .frame(width: 480)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var form: some View {
         Form {
             Section("General") {
                 Picker("Head size", selection: Bindable(settings).headSize) {
@@ -31,8 +41,6 @@ struct SettingsView: View {
 
                 Toggle("Show status indicator", isOn: Bindable(settings).showStatusIndicator)
                 Toggle("Show children for subagents", isOn: Bindable(settings).showSubagentChildren)
-
-                Toggle("Install Claude Code hooks while running", isOn: Bindable(settings).manageClaudeHooks)
 
                 HStack {
                     Text("Claude Code hooks")
@@ -102,19 +110,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 720)
         .onAppear {
             monoFonts = findMonospaceFonts()
             hookInstaller.refreshStatus()
-        }
-        .onChange(of: settings.manageClaudeHooks) { _, enabled in
-            // The hooks live in settings.json only while managed: turning the toggle off
-            // removes them straight away, turning it on puts them back.
-            if enabled {
-                hookInstaller.install()
-            } else {
-                hookInstaller.uninstall()
-            }
         }
         .onChange(of: settings.terminalFontName) {
             NotificationCenter.default.post(name: .terminalFontChanged, object: nil)

@@ -71,7 +71,7 @@ agent (`LSUIElement`), so it has no Dock icon; look for it in the menu bar.
 
 ## Hook Setup
 
-Claude Heads configures the Claude Code hooks it needs by itself. On every launch it rewrites `~/.claude-heads/hooks/notify.sh` and then, while "Install Claude Code hooks while running" (Settings, General; on by default) is enabled, adds `Stop`, `SubagentStart` and `SubagentStop` entries to your global `~/.claude/settings.json` that run that script. When you quit the app, it removes exactly those entries again. Hooks apply to `claude` sessions started after they were written; the app starts a fresh `claude` for every head, so its own heads always pick them up.
+Claude Heads configures the Claude Code hooks it needs by itself; there is no setting for it. On every launch it rewrites `~/.claude-heads/hooks/notify.sh` and adds `Stop`, `SubagentStart` and `SubagentStop` entries to your global `~/.claude/settings.json` that run that script. All three are installed while the app runs, and when you quit the app it removes exactly those entries again. "Show children for subagents" in Settings only affects display: the subagent hooks stay installed while it is off so that children keep being tracked and appear the moment it is turned back on. Hooks apply to `claude` sessions started after they were written; the app starts a fresh `claude` for every head, so its own heads always pick them up.
 
 What it writes, for each of the three events (with the absolute path of your home directory; the file itself is never touched with `~`):
 
@@ -98,11 +98,11 @@ How it edits the file:
 - If the file is not strict JSON, `"hooks"` is not an object, or the edited result would not parse or would change anything but our entries, nothing is written and the Settings window shows "Could not update settings.json: <reason>".
 - If the app crashes, the entries stay in the file harmlessly: `notify.sh` exits 0 when `CLAUDE_INSTANCE_ID` is not set, so a `claude` you run in a normal terminal is unaffected, and the next launch is idempotent (an event that already invokes `notify.sh` is left alone).
 
-The Settings window shows the current state ("Installed", "Missing: SubagentStart, SubagentStop", or the error above) next to a "Reinstall hooks" button, which strips any stale `notify.sh` entries (for example from a previous home directory) and writes fresh ones in a single edit, regardless of the toggle. Turning the toggle off removes the entries immediately; turning it on adds them back.
+The Settings window shows the current state ("Installed", "Missing: SubagentStart, SubagentStop", or the error above) next to a "Reinstall hooks" button, which strips any stale `notify.sh` entries (for example from a previous home directory) and writes fresh ones in a single edit.
 
 ### Manual setup
 
-If you turn automatic management off, add the hooks yourself. `~/.claude/settings.json` should contain `Stop`, `SubagentStart` and `SubagentStop` hooks all pointing at the same script:
+If you want the hooks in place without the app running (for example so a `claude` you start yourself is already covered when you later launch Claude Heads), add them yourself; the app leaves an entry that already invokes `notify.sh` alone and removes only entries pointing at that script on quit, so hand-written ones are treated exactly like its own. `~/.claude/settings.json` should contain `Stop`, `SubagentStart` and `SubagentStop` hooks all pointing at the same script:
 
 ```json
 {
