@@ -29,9 +29,18 @@ final class OrbitLayoutTests: XCTestCase {
     }
 
     func testPanelInsetScalesWithHeadSize() {
-        let insets = [HeadSize.small, .medium, .large].map { OrbitLayout(parentDiameter: $0.diameter).panelInset }
-        XCTAssertEqual(insets, insets.sorted(), "Panel inset must not shrink as heads grow")
-        XCTAssertEqual(Set(insets).count, insets.count, "Each head size needs its own inset")
+        // The inset is the part of the ring that sticks out past the parent circle plus the
+        // fixed slack, for every head size; a fixed-size ring would fail the per-size check.
+        var previous: CGFloat = 0
+        for size in [HeadSize.small, .medium, .large] {
+            let layout = OrbitLayout(parentDiameter: size.diameter)
+            let expected = layout.ringOuterRadius - size.diameter / 2 + OrbitLayout.panelSlack
+            XCTAssertEqual(layout.panelInset, expected, accuracy: 0.001, "\(size)")
+            // ringOuterRadius - d/2 = gap + childDiameter = 6 + 0.35 d, so the inset grows with d.
+            XCTAssertEqual(layout.panelInset, OrbitLayout.gap + size.diameter * 0.35 + OrbitLayout.panelSlack, accuracy: 0.001, "\(size)")
+            XCTAssertGreaterThan(layout.panelInset, previous, "Panel inset must grow with head size (\(size))")
+            previous = layout.panelInset
+        }
     }
 
     func testChildrenAreEvenlySpacedOnTheOrbit() {
