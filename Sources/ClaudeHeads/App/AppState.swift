@@ -14,7 +14,8 @@ public final class AppState {
     let settings = AppSettings.shared
     let processManager = ProcessManager.shared
     let positionManager = PositionManager.shared
-    /// Watches ~/.claude-heads/hooks for `.done` markers written by the Claude Code Stop hook.
+    /// Watches ~/.claude-heads/hooks for the `.done`/`.start`/`.stop` markers (each holding
+    /// the raw hook payload) written by the Claude Code Stop/SubagentStart/SubagentStop hooks.
     let hookWatcher = HookWatcher()
     /// Installs the hooks that write those markers into ~/.claude/settings.json while the
     /// app runs. Created after `hookWatcher` so notify.sh exists before it is referenced.
@@ -58,14 +59,17 @@ public final class AppState {
         }
 
         // Wire up Claude Code hook events — the Stop hook writes a marker for the head's UUID
-        hookWatcher.onTaskComplete = { [weak self] headID in
-            self?.handleHookTaskComplete(headID: headID)
+        hookWatcher.onTaskComplete = { [weak self] headID, backgroundTasks in
+            self?.handleHookTaskComplete(headID: headID, backgroundTasks: backgroundTasks)
         }
-        hookWatcher.onSubagentStart = { [weak self] headID, agentID, agentType in
-            self?.handleSubagentStart(headID: headID, agentID: agentID, agentType: agentType)
+        hookWatcher.onSubagentStart = { [weak self] headID, agentID, agentType, description in
+            self?.handleSubagentStart(headID: headID, agentID: agentID, agentType: agentType, description: description)
         }
         hookWatcher.onSubagentStop = { [weak self] headID, agentID in
             self?.handleSubagentStop(headID: headID, agentID: agentID)
+        }
+        hookWatcher.onBackgroundTasks = { [weak self] headID, tasks in
+            self?.handleBackgroundTasks(headID: headID, tasks: tasks)
         }
 
         // Wire up font change notifications
@@ -307,7 +311,7 @@ public final class AppState {
     }
 
     /// Called when the Claude Code Stop hook fires for a head (via HookWatcher).
-    private func handleHookTaskComplete(headID: UUID) {
+    private func handleHookTaskComplete(headID: UUID, backgroundTasks: [BackgroundTask]?) {
         guard let head = heads.first(where: { $0.id == headID }) else { return }
         hookedHeads.insert(headID)
 
@@ -320,27 +324,49 @@ public final class AppState {
             head.state = .idle
         }
         hookIdleAt[headID] = Date()
-        // The turn is over, so every subagent it spawned is done too (even if a
-        // SubagentStop marker was lost).
-        if !head.children.isEmpty {
-            head.children.removeAll()
+        // Stop fires at the end of every assistant turn, and background subagents keep
+        // running across turns, so the ring is reconciled against the payload's
+        // background_tasks rather than cleared: only a child the list reports as finished
+        // is removed. Otherwise each child leaves on its own SubagentStop (or process exit).
+        let reconciled = SubagentInstance.reconciling(head.children, withStopTasks: backgroundTasks)
+        if reconciled != head.children {
+            head.children = reconciled
         }
         triggerWave(for: head)
     }
 
     /// Called when the Claude Code SubagentStart hook fires for a head (via HookWatcher).
-    private func handleSubagentStart(headID: UUID, agentID: String, agentType: String) {
+    private func handleSubagentStart(headID: UUID, agentID: String, agentType: String, description: String?) {
         guard let head = heads.first(where: { $0.id == headID }) else { return }
         // Deliberately not marking the head as hooked: a user may have configured only the
         // subagent hooks, and the Stop hook alone decides whether the idle heuristic yields.
-        guard !head.children.contains(where: { $0.id == agentID }) else { return }
-        head.children.append(SubagentInstance(id: agentID, type: agentType))
+        if let index = head.children.firstIndex(where: { $0.id == agentID }) {
+            // Already known (e.g. added from a background_tasks list first): fill in what is new.
+            if !agentType.isEmpty, head.children[index].type != agentType {
+                head.children[index].type = agentType
+            }
+            if let description, !description.isEmpty, head.children[index].description != description {
+                head.children[index].description = description
+            }
+            return
+        }
+        head.children.append(SubagentInstance(id: agentID, type: agentType, description: description))
     }
 
     /// Called when the Claude Code SubagentStop hook fires for a head (via HookWatcher).
     private func handleSubagentStop(headID: UUID, agentID: String) {
         guard let head = heads.first(where: { $0.id == headID }) else { return }
         head.children.removeAll { $0.id == agentID }
+    }
+
+    /// Called whenever a hook payload for a head lists the session's background tasks:
+    /// relabels known children and adds running subagents that were never seen starting.
+    private func handleBackgroundTasks(headID: UUID, tasks: [BackgroundTask]) {
+        guard let head = heads.first(where: { $0.id == headID }) else { return }
+        let merged = SubagentInstance.merging(head.children, with: tasks)
+        if merged != head.children {
+            head.children = merged
+        }
     }
 
     private func handleProcessActivity(pid: pid_t) {
