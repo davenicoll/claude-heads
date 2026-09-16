@@ -1,11 +1,35 @@
 import SwiftUI
 
 struct SettingsView: View {
+    static let width: CGFloat = 480
+
     private var settings = AppSettings.shared
     private var hookInstaller = HookInstaller.shared
     @State private var monoFonts: [String] = []
 
+    /// When nil the form sizes its height to its content (no scroll bar); when set, the
+    /// form is given exactly this height and scrolls, for displays too short for the whole form.
+    private let fixedHeight: CGFloat?
+
+    init(fixedHeight: CGFloat? = nil) {
+        self.fixedHeight = fixedHeight
+    }
+
     var body: some View {
+        // Fixed width, but the height follows the content: a grouped Form is a scroll view,
+        // so giving it a fixed height that is shorter than its rows shows a scroll bar.
+        // `fixedSize` makes it report its ideal height (all sections fully laid out) and
+        // `AppState.showSettings()` sizes the window to that.
+        if let fixedHeight {
+            form.frame(width: Self.width, height: fixedHeight)
+        } else {
+            form
+                .frame(width: Self.width)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var form: some View {
         Form {
             Section("General") {
                 Picker("Head size", selection: Bindable(settings).headSize) {
@@ -31,8 +55,6 @@ struct SettingsView: View {
 
                 Toggle("Show status indicator", isOn: Bindable(settings).showStatusIndicator)
                 Toggle("Show children for subagents", isOn: Bindable(settings).showSubagentChildren)
-
-                Toggle("Install Claude Code hooks while running", isOn: Bindable(settings).manageClaudeHooks)
 
                 HStack {
                     Text("Claude Code hooks")
@@ -102,19 +124,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 720)
         .onAppear {
             monoFonts = findMonospaceFonts()
             hookInstaller.refreshStatus()
-        }
-        .onChange(of: settings.manageClaudeHooks) { _, enabled in
-            // The hooks live in settings.json only while managed: turning the toggle off
-            // removes them straight away, turning it on puts them back.
-            if enabled {
-                hookInstaller.install()
-            } else {
-                hookInstaller.uninstall()
-            }
         }
         .onChange(of: settings.terminalFontName) {
             NotificationCenter.default.post(name: .terminalFontChanged, object: nil)
