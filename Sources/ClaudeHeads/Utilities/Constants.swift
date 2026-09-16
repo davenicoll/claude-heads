@@ -23,6 +23,22 @@ enum Constants {
     static let hooksDirectory: URL = {
         claudeHeadsDirectory.appendingPathComponent("hooks", isDirectory: true)
     }()
+
+    /// Claude Code's global (user-level) settings file, where `HookInstaller` manages the
+    /// `hooks` entries. Never a project-level `.claude/settings.json`. Honours
+    /// `CLAUDE_CONFIG_DIR` like Claude Code does, falling back to `~/.claude`.
+    static let claudeSettingsFile: URL = {
+        claudeConfigDirectory.appendingPathComponent("settings.json")
+    }()
+
+    static let claudeConfigDirectory: URL = {
+        if let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"],
+           !custom.trimmingCharacters(in: .whitespaces).isEmpty {
+            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+    }()
 }
 
 // MARK: - HeadGeometry

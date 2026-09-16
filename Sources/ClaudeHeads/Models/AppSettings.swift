@@ -57,6 +57,12 @@ final class AppSettings {
         didSet { save() }
     }
 
+    /// Install the Stop/SubagentStart/SubagentStop hooks into ~/.claude/settings.json at
+    /// launch and remove them again on quit. Off means the file is never touched.
+    var manageClaudeHooks: Bool {
+        didSet { save() }
+    }
+
     var claudeContinue: Bool {
         didSet { save() }
     }
@@ -108,6 +114,7 @@ final class AppSettings {
         self.launchAtLogin = false
         self.showStatusIndicator = false
         self.showSubagentChildren = true
+        self.manageClaudeHooks = true
         self.claudeContinue = true
         self.claudeSkipPermissions = false
         self.claudeRemoteControl = false
@@ -128,6 +135,7 @@ final class AppSettings {
         launchAtLogin = stored.launchAtLogin
         showStatusIndicator = stored.showStatusIndicator ?? false
         showSubagentChildren = stored.showSubagentChildren ?? true
+        manageClaudeHooks = stored.manageClaudeHooks ?? true
         claudeContinue = stored.claudeContinue ?? true
         claudeSkipPermissions = stored.claudeSkipPermissions ?? false
         claudeRemoteControl = stored.claudeRemoteControl ?? false
@@ -143,6 +151,7 @@ final class AppSettings {
             launchAtLogin: launchAtLogin,
             showStatusIndicator: showStatusIndicator,
             showSubagentChildren: showSubagentChildren,
+            manageClaudeHooks: manageClaudeHooks,
             claudeContinue: claudeContinue,
             claudeSkipPermissions: claudeSkipPermissions,
             claudeRemoteControl: claudeRemoteControl
@@ -166,6 +175,7 @@ struct StoredSettings: Codable {
     let launchAtLogin: Bool
     let showStatusIndicator: Bool?
     let showSubagentChildren: Bool?
+    let manageClaudeHooks: Bool?
     let claudeContinue: Bool?
     let claudeSkipPermissions: Bool?
     let claudeRemoteControl: Bool?
