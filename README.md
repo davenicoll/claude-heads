@@ -17,7 +17,7 @@ Heads are only created for sessions started from the app; it does not discover `
 - Wave animation when Claude goes idle after working
 - Subagent orbit: with the `SubagentStart`/`SubagentStop` hooks configured, each Claude Code subagent appears as a small head (35% of the parent's size, coloured by agent type, hover for the agent type) orbiting its parent until it finishes; turn it off with "Show children for subagents" in Settings
 - Configurable terminal font, head size, snap distance, subagent children on/off, and default CLI flags/arguments
-- Installs the Claude Code hooks it needs into `~/.claude/settings.json` on launch and removes them on quit, with a minimal text edit that leaves the rest of the file byte-identical (see Hook Setup)
+- Installs the Claude Code hooks it needs into `~/.claude/settings.json` on launch and removes them on quit, with a minimal text edit that preserves everything outside its own entries byte-for-byte (see Hook Setup)
 - Menu bar app (no dock icon)
 
 ## Requirements
@@ -90,8 +90,10 @@ What it writes, for each of the three events (with the absolute path of your hom
 How it edits the file:
 
 - The edit is a minimal textual splice, not a rewrite: the missing entries are inserted at the start of the existing `"hooks"` object (or a new `"hooks"` block at the start of the file if there is none), using the file's own indentation and line endings. Every other byte, key order and comment-free formatting is preserved, so a `settings.json` that lives in a dotfiles git repository shows only the added lines in `git diff`.
-- Removal is the inverse splice: only entries whose command ends in `.claude-heads/hooks/notify.sh` are removed, together with any event array or `"hooks"` object left empty by that removal. Installing and then quitting leaves the file byte-identical to how it started.
-- Before the first modification a one-time backup is written next to the file as `~/.claude/settings.json.claude-heads.bak`; it is never overwritten. If the file does not exist it is created with just the hooks block (and no backup).
+- Removal is the inverse splice: only command entries that invoke `.claude-heads/hooks/notify.sh` are removed. A matcher group that contained only our command is removed whole, and an event array or `"hooks"` object that becomes empty is removed with its key. Everything outside those entries is preserved byte-for-byte, so installing and then quitting normally returns the file to exactly its original bytes.
+- Before the first modification a one-time backup of the original is written to `~/.claude-heads/settings.json.claude-heads.bak` (outside `~/.claude`, so it does not show up in a dotfiles repository); it is never overwritten. If the file is missing or empty it is created with just the hooks block (and no backup).
+- The settings file is `$CLAUDE_CONFIG_DIR/settings.json` when Claude Code's `CLAUDE_CONFIG_DIR` is set in the app's environment, otherwise `~/.claude/settings.json`.
+- Two running copies of Claude Heads share the file: quitting one removes the hooks the other still needs for heads it starts afterwards (use "Reinstall hooks" or relaunch to put them back).
 - Writes are atomic (temp file plus rename in the same directory) and follow symlinks, so a `~/.claude` that is a symlink into a repository is left as a symlink and the real file is updated in place.
 - If the file is not strict JSON, `"hooks"` is not an object, or the edited result would not parse or would change anything but our entries, nothing is written and the Settings window shows "Could not update settings.json: <reason>".
 - If the app crashes, the entries stay in the file harmlessly: `notify.sh` exits 0 when `CLAUDE_INSTANCE_ID` is not set, so a `claude` you run in a normal terminal is unaffected, and the next launch is idempotent (an event that already invokes `notify.sh` is left alone).

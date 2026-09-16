@@ -41,8 +41,9 @@ This describes what the app does today. Anything not listed here is not implemen
 ## Hooks
 
 - `HookInstaller` adds `Stop`, `SubagentStart` and `SubagentStop` entries running `~/.claude-heads/hooks/notify.sh` (absolute path) to the global `~/.claude/settings.json` at launch and removes exactly those entries on quit, while "Install Claude Code hooks while running" is on (default)
-- The edit is a minimal splice that keeps the rest of the file byte-identical (key order, indentation, line endings); install then quit returns the file to its original bytes. Other hooks and settings are never touched
-- A one-time backup `settings.json.claude-heads.bak` is written before the first modification; writes are atomic and follow symlinks; a missing file is created with just the hooks block
+- The edit is a minimal splice: everything outside the inserted entries is preserved byte-for-byte (key order, indentation, line endings). Removal deletes only our command entries; a matcher group holding only our command is removed whole, and an event array or `hooks` object that becomes empty is removed with its key. Other hooks and settings are never touched
+- A one-time backup is written to `~/.claude-heads/settings.json.claude-heads.bak` before the first modification (kept out of `~/.claude` so it stays out of dotfiles repositories); writes are atomic (0600 temp file + rename) and follow symlinks; a dangling symlink is reported, never replaced; a missing or empty file is created with just the hooks block. `CLAUDE_CONFIG_DIR` is honoured
+- Two running instances share the file: quitting one removes the hooks the other needs for heads started afterwards
 - Invalid JSON, a non-object `hooks`, or a result that would not parse or would change anything else means nothing is written and Settings shows "Could not update settings.json: <reason>"
 - Hooks apply to `claude` sessions started after the write, so the app's own (freshly spawned) heads always see them. After a crash the entries remain harmlessly (`notify.sh` exits 0 without `CLAUDE_INSTANCE_ID`) and the next launch is idempotent
 - Settings shows the state ("Installed", "Missing: ...", or the error) and a "Reinstall hooks" button that replaces stale `notify.sh` entries with fresh ones regardless of the toggle; turning the toggle off removes the entries immediately

@@ -36,6 +36,7 @@ enum HookSettingsMerge {
         case notAnObject
         case hooksNotAnObject
         case eventNotAnArray(String)
+        case duplicateKey(String)
         case resultInvalid(String)
 
         var description: String {
@@ -44,6 +45,7 @@ enum HookSettingsMerge {
             case .notAnObject: "settings.json does not contain a top-level object"
             case .hooksNotAnObject: "\"hooks\" is not an object"
             case .eventNotAnArray(let event): "\"hooks\".\"\(event)\" is not an array"
+            case .duplicateKey(let key): "duplicate key \"\(key)\" (parsers disagree on which wins)"
             case .resultInvalid(let detail): "refusing to write: \(detail)"
             }
         }
@@ -78,7 +80,7 @@ enum HookSettingsMerge {
                 doc = try Document(bytes)
                 guard let hooksValue = doc.hooksMember?.value,
                       case .object(_, let members) = hooksValue,
-                      let member = members.last(where: { $0.key == event }) else { continue }
+                      let member = members.first(where: { $0.key == event }) else { continue }
                 guard case .array = member.value else { throw Failure.eventNotAnArray(event) }
                 bytes = insert(into: member.value, of: bytes, style: style) { depth in
                     style.matcherGroup(scriptPath: scriptPath, depth: depth)
@@ -133,7 +135,7 @@ enum HookSettingsMerge {
                     }
                     for (groupIndex, group) in groups.enumerated() {
                         guard case .object(_, let groupMembers) = group,
-                              let inner = groupMembers.last(where: { $0.key == "hooks" }),
+                              let inner = groupMembers.first(where: { $0.key == "hooks" }),
                               case .array(_, let commands) = inner.value else { continue }
                         for (commandIndex, command) in commands.enumerated() where isOurs(command, in: bytes) {
                             edit = removalRange(of: commandIndex, in: inner.value, itemRanges: commands.map(\.range))
@@ -225,18 +227,21 @@ enum HookSettingsMerge {
         }
     }
 
-    /// True when a parsed command entry's `command` string is a path to our script.
+    /// True when a parsed command entry's `command` string invokes our script: any
+    /// whitespace-separated word (quotes stripped) ends with the script path suffix, so
+    /// `"/x/.claude-heads/hooks/notify.sh"`, `"bash /x/.claude-heads/hooks/notify.sh"` and
+    /// `"/x/.claude-heads/hooks/notify.sh --flag"` all count.
     static func isOurs(command: Any?) -> Bool {
         guard let command = command as? String else { return false }
-        let trimmed = command
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-        return trimmed.hasSuffix(scriptPathSuffix)
+        let quotes = CharacterSet(charactersIn: "\"'")
+        return command.split(whereSeparator: { $0.isWhitespace }).contains { word in
+            word.trimmingCharacters(in: quotes).hasSuffix(scriptPathSuffix)
+        }
     }
 
     private static func isOurs(_ node: Node, in bytes: [UInt8]) -> Bool {
         guard case .object(_, let members) = node,
-              let command = members.last(where: { $0.key == "command" }),
+              let command = members.first(where: { $0.key == "command" }),
               case .scalar(let range) = command.value else { return false }
         return isOurs(command: try? JSONSerialization.jsonObject(
             with: Data(bytes[range]), options: .fragmentsAllowed))
@@ -494,12 +499,14 @@ enum HookSettingsMerge {
     }
 
     /// The scanned file: root object plus a lookup for the `"hooks"` member. Duplicate keys
-    /// resolve to the last occurrence, matching `JSON.parse` in Claude Code.
+    /// in the root or the `"hooks"` object are refused: `JSONSerialization` keeps the first
+    /// occurrence and `JSON.parse` (Claude Code) the last, so there is no edit that both
+    /// would read the same way.
     struct Document {
         let root: Node
         let rootMembers: [Member]
 
-        var hooksMember: Member? { rootMembers.last(where: { $0.key == "hooks" }) }
+        var hooksMember: Member? { rootMembers.first(where: { $0.key == "hooks" }) }
 
         init(_ bytes: [UInt8]) throws {
             var scanner = Scanner(bytes: bytes)
@@ -509,8 +516,20 @@ enum HookSettingsMerge {
             scanner.skipWhitespace()
             guard scanner.atEnd else { throw Failure.invalidJSON("trailing characters") }
             guard case .object(_, let members) = node else { throw Failure.notAnObject }
+            try Self.rejectDuplicateKeys(members)
+            if let hooks = members.first(where: { $0.key == "hooks" }),
+               case .object(_, let hookMembers) = hooks.value {
+                try Self.rejectDuplicateKeys(hookMembers)
+            }
             root = node
             rootMembers = members
+        }
+
+        private static func rejectDuplicateKeys(_ members: [Member]) throws {
+            var seen = Set<String>()
+            for member in members where !seen.insert(member.key).inserted {
+                throw Failure.duplicateKey(member.key)
+            }
         }
     }
 
@@ -658,28 +677,40 @@ final class HookInstaller {
     /// Current state of the hooks in the settings file, refreshed after every operation.
     private(set) var status: Status = .missing(HookSettingsMerge.events)
 
-    /// Name appended to the settings file for the one-time backup.
-    static let backupSuffix = ".claude-heads.bak"
+    /// Filename of the one-time backup, written into `backupDirectory` (not next to the
+    /// settings file, which usually lives in the user's dotfiles repository).
+    static let backupFilename = "settings.json.claude-heads.bak"
 
     let settingsFileURL: URL
+    let backupDirectory: URL
     let scriptPath: String
 
     init(
         settingsFileURL: URL = Constants.claudeSettingsFile,
+        backupDirectory: URL = Constants.claudeHeadsDirectory,
         scriptPath: String = Constants.hooksDirectory.appendingPathComponent("notify.sh").path
     ) {
         self.settingsFileURL = settingsFileURL
+        self.backupDirectory = backupDirectory
         self.scriptPath = scriptPath
         refreshStatus()
     }
+
+    var backupFileURL: URL { backupDirectory.appendingPathComponent(Self.backupFilename) }
 
     // MARK: Operations
 
     /// Re-reads the settings file and updates `status` without writing anything.
     @discardableResult
     func refreshStatus() -> Status {
-        status = Self.inspect(text: readSettings() ?? "{}")
+        status = Self.inspect(text: currentText())
         return status
+    }
+
+    /// The file's text, with a missing, empty or whitespace-only file read as `{}`.
+    private func currentText() -> String {
+        guard let text = readSettings(), !text.allSatisfy(\.isWhitespace) else { return "{}" }
+        return text
     }
 
     /// Ensures our entries exist for every event. Returns true when the file is in the
@@ -717,7 +748,12 @@ final class HookInstaller {
 
     /// Runs `merge` on the file's text and writes the result if it changed, updating `status`.
     private func apply(createIfMissing: Bool = true, _ merge: (String) -> Result<String, HookSettingsMerge.Failure>) -> Bool {
-        let fm = FileManager.default
+        if let dangling = danglingSymlinkDescription() {
+            // Never let the atomic rename replace a symlink with a regular file.
+            status = .failed(dangling)
+            NSLog("[HookInstaller] \(status.label)")
+            return false
+        }
         let existing = readSettings()
         if existing == nil, fm.fileExists(atPath: resolvedFileURL.path) {
             // The file is there but could not be read as UTF-8 text: never touch it.
@@ -725,11 +761,13 @@ final class HookInstaller {
             NSLog("[HookInstaller] \(status.label)")
             return false
         }
-        if existing == nil, !createIfMissing {
+        // A missing, empty or whitespace-only file holds no settings: treat it as "{}".
+        let isBlank = existing?.allSatisfy(\.isWhitespace) ?? true
+        if isBlank, !createIfMissing {
             status = .missing(HookSettingsMerge.events)
             return true
         }
-        let original = existing ?? "{}"
+        let original = isBlank ? "{}" : existing!
 
         switch merge(original) {
         case .failure(let failure):
@@ -740,15 +778,15 @@ final class HookInstaller {
         case .success(let updated):
             if updated != original {
                 do {
-                    if existing != nil { try backupIfNeeded() }
-                    try writeSettings(updated + (existing == nil ? "\n" : ""))
+                    if !isBlank { try backupIfNeeded() }
+                    try writeSettings(updated + (isBlank ? "\n" : ""))
                 } catch {
                     status = .failed(error.localizedDescription)
                     NSLog("[HookInstaller] \(status.label)")
                     return false
                 }
             }
-            status = Self.inspect(text: readSettings() ?? "{}")
+            status = Self.inspect(text: currentText())
             return true
         }
     }
@@ -760,6 +798,20 @@ final class HookInstaller {
         settingsFileURL.resolvingSymlinksInPath()
     }
 
+    /// A reason string when the settings file or its directory is a symlink whose target is
+    /// missing (`resolvingSymlinksInPath` leaves those unresolved, so a write would replace
+    /// the link itself). Nil when everything resolves or nothing is a symlink.
+    private func danglingSymlinkDescription() -> String? {
+        for url in [settingsFileURL, settingsFileURL.deletingLastPathComponent()] {
+            let type = (try? fm.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+            guard type == .typeSymbolicLink else { continue }
+            if !fm.fileExists(atPath: url.path) {
+                return "\(url.path) is a symlink to a missing target"
+            }
+        }
+        return nil
+    }
+
     private func readSettings() -> String? {
         guard let data = fm.contents(atPath: resolvedFileURL.path) else { return nil }
         return String(data: data, encoding: .utf8)
@@ -768,30 +820,43 @@ final class HookInstaller {
     private var fm: FileManager { .default }
 
     private func backupIfNeeded() throws {
-        let source = resolvedFileURL
-        let backup = source.appendingPathExtension(String(Self.backupSuffix.dropFirst()))
+        let backup = backupFileURL
         guard !fm.fileExists(atPath: backup.path) else { return }
-        try fm.copyItem(at: source, to: backup)
+        try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        try fm.copyItem(at: resolvedFileURL, to: backup)
     }
 
-    /// Writes `text` to a temporary file in the same directory and renames it over the real
-    /// file, preserving the original's permissions, so a reader never sees a partial file.
+    /// Writes `text` to a temporary file in the same directory (created 0600 with O_EXCL,
+    /// then given the original's mode) and renames it over the real file, so a reader never
+    /// sees a partial file and the content is never world-readable in between.
     private func writeSettings(_ text: String) throws {
         let target = resolvedFileURL
         let directory = target.deletingLastPathComponent()
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let temp = directory.appendingPathComponent(".settings.json.claude-heads-\(UUID().uuidString).tmp")
-        try Data(text.utf8).write(to: temp, options: [])
-        if let permissions = try? fm.attributesOfItem(atPath: target.path)[.posixPermissions] {
-            try? fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: temp.path)
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw Self.posixError("open failed") }
+        do {
+            try FileHandle(fileDescriptor: fd, closeOnDealloc: true).write(contentsOf: Data(text.utf8))
+        } catch {
+            try? fm.removeItem(at: temp)
+            throw error
+        }
+        if let mode = (try? fm.attributesOfItem(atPath: target.path))?[.posixPermissions] as? NSNumber {
+            chmod(temp.path, mode_t(mode.uint16Value))
         }
         guard rename(temp.path, target.path) == 0 else {
-            let error = errno
+            let error = Self.posixError("rename failed")
             try? fm.removeItem(at: temp)
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(error), userInfo: [
-                NSLocalizedDescriptionKey: "rename failed: \(String(cString: strerror(error)))",
-            ])
+            throw error
         }
+    }
+
+    private static func posixError(_ what: String) -> NSError {
+        let code = errno
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+            NSLocalizedDescriptionKey: "\(what): \(String(cString: strerror(code)))",
+        ])
     }
 }

@@ -412,6 +412,80 @@ final class HookSettingsMergeTests: XCTestCase {
         XCTAssertEqual(try uninstalled(try installed(onePresent)), "{}")
     }
 
+    func testUninstallMiddleItemKeepsNeighboursAndCommas() throws {
+        let text = """
+        {
+          "hooks": {
+            "SessionEnd": [ { "hooks": [ { "type": "command", "command": "a" } ] } ],
+            "Stop": [
+              { "hooks": [ { "type": "command", "command": "first" } ] },
+              { "hooks": [ { "type": "command", "command": "/x/.claude-heads/hooks/notify.sh" } ] },
+              { "hooks": [ { "type": "command", "command": "last" } ] }
+            ],
+            "Notification": [ { "hooks": [ { "type": "command", "command": "b" } ] } ]
+          }
+        }
+        """
+        let expected = """
+        {
+          "hooks": {
+            "SessionEnd": [ { "hooks": [ { "type": "command", "command": "a" } ] } ],
+            "Stop": [
+              { "hooks": [ { "type": "command", "command": "first" } ] },
+              { "hooks": [ { "type": "command", "command": "last" } ] }
+            ],
+            "Notification": [ { "hooks": [ { "type": "command", "command": "b" } ] } ]
+          }
+        }
+        """
+        XCTAssertEqual(try uninstalled(text), expected)
+
+        // Our event key in the middle of the hooks object.
+        let middleEvent = "{\n  \"hooks\": {\n    \"A\": [],\n    \"Stop\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"~/.claude-heads/hooks/notify.sh\" } ] } ],\n    \"B\": []\n  }\n}"
+        XCTAssertEqual(try uninstalled(middleEvent), "{\n  \"hooks\": {\n    \"A\": [],\n    \"B\": []\n  }\n}")
+    }
+
+    func testDuplicateKeysAreRefused() {
+        XCTAssertEqual(HookSettingsMerge.install(into: "{\"a\": 1, \"a\": 2}", scriptPath: script), .failure(.duplicateKey("a")))
+        XCTAssertEqual(HookSettingsMerge.install(into: "{\"hooks\": {}, \"hooks\": {}}", scriptPath: script), .failure(.duplicateKey("hooks")))
+        XCTAssertEqual(HookSettingsMerge.install(into: "{\"hooks\": {\"Stop\": [], \"Stop\": []}}", scriptPath: script), .failure(.duplicateKey("Stop")))
+        XCTAssertEqual(HookSettingsMerge.uninstall(from: "{\"hooks\": {\"Stop\": [], \"Stop\": []}}"), .failure(.duplicateKey("Stop")))
+        XCTAssertEqual(HookSettingsMerge.missingEvents(in: "{\"a\": 1, \"a\": 2}"), .failure(.duplicateKey("a")))
+    }
+
+    func testIsOursMatchesWrappedAndFlaggedCommands() {
+        XCTAssertTrue(HookSettingsMerge.isOurs(command: "/x/.claude-heads/hooks/notify.sh"))
+        XCTAssertTrue(HookSettingsMerge.isOurs(command: "bash /x/.claude-heads/hooks/notify.sh"))
+        XCTAssertTrue(HookSettingsMerge.isOurs(command: "/x/.claude-heads/hooks/notify.sh --flag"))
+        XCTAssertTrue(HookSettingsMerge.isOurs(command: "\"/Users/o d/.claude-heads/hooks/notify.sh\""))
+        XCTAssertFalse(HookSettingsMerge.isOurs(command: "/x/.claude-heads/hooks/notify.sh.bak"))
+        XCTAssertFalse(HookSettingsMerge.isOurs(command: "echo notify.sh"))
+        XCTAssertFalse(HookSettingsMerge.isOurs(command: 5))
+        XCTAssertFalse(HookSettingsMerge.isOurs(command: nil))
+        // Fixture: a wrapped invocation counts as installed and is removed.
+        let wrapped = "{\n  \"hooks\": {\n    \"Stop\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"bash /x/.claude-heads/hooks/notify.sh\" } ] } ]\n  }\n}"
+        XCTAssertEqual(HookSettingsMerge.missingEvents(in: wrapped), .success(["SubagentStart", "SubagentStop"]))
+        XCTAssertEqual(HookSettingsMerge.uninstall(from: wrapped), .success("{}"))
+    }
+
+    func testWhitespaceOnlyContainersCollapseOnRoundTrip() throws {
+        // "{ }" and {"hooks": {}} carry no configuration; the empty container's inner
+        // whitespace is replaced on install and it collapses to "{}" on uninstall.
+        XCTAssertEqual(try uninstalled(try installed("{ }")), "{}")
+        XCTAssertEqual(try uninstalled(try installed("{\n}")), "{}")
+        XCTAssertEqual(try uninstalled(try installed("{\"hooks\": {}}")), "{}")
+        XCTAssertEqual(try uninstalled(try installed("{\n  \"a\": 1,\n  \"hooks\": {}\n}")), "{\n  \"a\": 1\n}")
+        XCTAssertEqual(try uninstalled(try installed("{\n  \"hooks\": {},\n  \"a\": 1\n}")), "{\n  \"a\": 1\n}")
+    }
+
+    func testMixedLineEndingsRoundTrip() throws {
+        let mixed = "{\r\n  \"a\": 1,\n  \"b\": {\n    \"c\": 2\r\n  }\n}"
+        let out = try installed(mixed)
+        try assertInstalled(out, from: mixed)
+        XCTAssertTrue(out.hasPrefix("{\r\n  \"hooks\": {\r\n"), "CRLF wins when the file mixes endings")
+        XCTAssertEqual(try uninstalled(out), mixed)
+    }
+
     func testRoundTripDropsPreexistingEmptyEventArrayWeReused() throws {
         // Installing into an existing empty "Stop": [] reuses it; removing our only group
         // then empties it, and an event array we emptied is removed with its key. The empty
@@ -440,9 +514,13 @@ final class HookInstallerTests: XCTestCase {
 
     private let script = "/Users/someone/.claude-heads/hooks/notify.sh"
 
+    private func makeInstaller(file: URL) -> HookInstaller {
+        HookInstaller(settingsFileURL: file, backupDirectory: tempDir.appendingPathComponent("backups"), scriptPath: script)
+    }
+
     func testCreatesFileWhenMissingWithoutBackup() throws {
         let file = tempDir.appendingPathComponent("settings.json")
-        let installer = HookInstaller(settingsFileURL: file, scriptPath: script)
+        let installer = makeInstaller(file: file)
         XCTAssertEqual(installer.status, .missing(HookSettingsMerge.events))
 
         XCTAssertTrue(installer.install())
@@ -450,12 +528,36 @@ final class HookInstallerTests: XCTestCase {
         let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("{\n  \"hooks\": {\n"))
         XCTAssertTrue(text.hasSuffix("}\n"))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path + HookInstaller.backupSuffix),
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installer.backupFileURL.path),
                        "no backup for a file we created")
 
         XCTAssertTrue(installer.uninstall())
         XCTAssertEqual(installer.status, .missing(HookSettingsMerge.events))
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "{}\n")
+    }
+
+    func testEmptyOrWhitespaceFileIsTreatedAsEmptyObject() throws {
+        for blank in ["", "  \n\n"] {
+            let file = tempDir.appendingPathComponent("settings-\(blank.count).json")
+            try blank.write(to: file, atomically: true, encoding: .utf8)
+            let installer = makeInstaller(file: file)
+            XCTAssertEqual(installer.status, .missing(HookSettingsMerge.events))
+            XCTAssertTrue(installer.install())
+            XCTAssertEqual(installer.status, .installed)
+            XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).hasPrefix("{\n  \"hooks\": {"))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: installer.backupFileURL.path), "blank file needs no backup")
+        }
+    }
+
+    func testDanglingSymlinkIsRefused() throws {
+        let link = tempDir.appendingPathComponent("settings.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: tempDir.appendingPathComponent("nowhere/settings.json"))
+        let installer = makeInstaller(file: link)
+        XCTAssertFalse(installer.install())
+        guard case .failed(let reason) = installer.status else { return XCTFail("expected failed, got \(installer.status)") }
+        XCTAssertTrue(reason.contains("symlink"), reason)
+        let attrs = try FileManager.default.attributesOfItem(atPath: link.path)
+        XCTAssertEqual(attrs[.type] as? FileAttributeType, .typeSymbolicLink, "the link must not be replaced by a file")
     }
 
     func testBackupIsWrittenOnceAndFollowsSymlinks() throws {
@@ -471,7 +573,7 @@ final class HookInstallerTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: linkDir, withDestinationURL: realDir)
         let linkFile = linkDir.appendingPathComponent("settings.json")
 
-        let installer = HookInstaller(settingsFileURL: linkFile, scriptPath: script)
+        let installer = makeInstaller(file: linkFile)
         XCTAssertTrue(installer.install())
         XCTAssertEqual(installer.status, .installed)
 
@@ -481,8 +583,11 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertEqual(realAttrs[.type] as? FileAttributeType, .typeRegular)
         XCTAssertEqual((realAttrs[.posixPermissions] as? Int), 0o600, "permissions preserved across the atomic rename")
 
-        let backup = realDir.appendingPathComponent("settings.json.claude-heads.bak")
+        let backup = installer.backupFileURL
+        XCTAssertEqual(backup.lastPathComponent, "settings.json.claude-heads.bak")
         XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), original)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: realDir.path).contains { $0.contains(".bak") },
+                       "backup lives outside the settings directory")
 
         // A second modification must not overwrite the backup.
         XCTAssertTrue(installer.uninstall())
@@ -497,13 +602,13 @@ final class HookInstallerTests: XCTestCase {
         let file = tempDir.appendingPathComponent("settings.json")
         let broken = "{ \"model\": \"opus\", }"
         try broken.write(to: file, atomically: true, encoding: .utf8)
-        let installer = HookInstaller(settingsFileURL: file, scriptPath: script)
+        let installer = makeInstaller(file: file)
         guard case .failed(let reason) = installer.status else { return XCTFail("expected failed, got \(installer.status)") }
         XCTAssertTrue(reason.contains("not valid JSON"), reason)
 
         XCTAssertFalse(installer.install())
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), broken)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path + HookInstaller.backupSuffix))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installer.backupFileURL.path))
         XCTAssertFalse(installer.reinstall())
         XCTAssertFalse(installer.uninstall())
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), broken)
@@ -521,7 +626,7 @@ final class HookInstallerTests: XCTestCase {
         }
         """
         try stale.write(to: file, atomically: true, encoding: .utf8)
-        let installer = HookInstaller(settingsFileURL: file, scriptPath: script)
+        let installer = makeInstaller(file: file)
         XCTAssertEqual(installer.status, .missing(["SubagentStart", "SubagentStop"]))
 
         XCTAssertTrue(installer.reinstall())
