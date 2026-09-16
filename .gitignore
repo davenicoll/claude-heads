@@ -9,3 +9,4 @@ DerivedData/
 *.ipa
 .claude-heads/
 dist/
+.claude/worktrees/
