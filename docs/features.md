@@ -35,13 +35,15 @@ This describes what the app does today. Anything not listed here is not implemen
 - The head waves when Claude goes quiet after at least 5 seconds of continuous output (a task finishing), and when the process exits
 - Clicking the waving head dismisses the wave and opens the terminal
 - With the Claude Code `Stop` hook configured (see the README Hook Setup section), `HookWatcher` picks up the `<uuid>.done` marker and the head goes idle and waves immediately, overriding the output-idle heuristic
-- With the `SubagentStart`/`SubagentStop` hooks configured, `HookWatcher` also picks up `<uuid>.<agent_id>.start`/`.stop` markers and each running subagent is drawn as a small head orbiting its parent (coloured by agent type, hover for the type); they disappear when the subagent stops or the parent's Stop fires
+- With the `SubagentStart`/`SubagentStop` hooks configured, `HookWatcher` also picks up `<uuid>.<agent_id>.start`/`.stop` markers and each running subagent is drawn as a small head orbiting its parent (35% of the parent head's diameter, so it follows the head size setting; coloured by agent type, hover for the type); they disappear when the subagent stops or the parent's Stop fires
+- "Show children for subagents" (Settings, on by default) hides the orbit: the ring is not drawn or animated, the head panel shrinks back to the plain head, and only the parent head is clickable. Subagents are still tracked while hidden, so turning it back on shows the ones currently running
 
 ## Settings
 
 - Head size (small / medium / large), applied live
 - Snap distance (20-120pt)
 - Show/hide status indicator
+- Show/hide children for subagents (the orbit ring), applied live
 - Terminal font family (monospace fonts only) and size, applied live to open terminals
 - Claude Code flags and extra arguments
 - Menu bar icon lists all heads (click to bring one to the front), New Head, Settings, Quit; the app has no Dock icon

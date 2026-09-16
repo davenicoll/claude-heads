@@ -7,8 +7,8 @@ import SwiftUI
 /// instead of letting SwiftUI's gesture system consume them.
 /// Also accepts first mouse so the panel responds without needing a focus click.
 ///
-/// The panel is larger than the visible head (it leaves room for the subagent orbit
-/// ring), so hit-testing is restricted by `hitRegion`: points outside the parent head
+/// While subagent children are shown the panel is larger than the visible head (it
+/// leaves room for the orbit ring), so hit-testing is restricted by `hitRegion`: points outside the parent head
 /// and its orbiting children are not claimed by this view, and the transparent panel
 /// area lets the click fall through to whatever is underneath.
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
@@ -137,12 +137,14 @@ final class DraggablePanel: NSPanel {
 
 /// Root SwiftUI view of a head panel: the head itself, padded on every side by the
 /// orbit inset so the head window sits at `head.position` while the panel is larger.
+/// The inset is zero while subagent children are hidden; both reads below are of
+/// `AppSettings` observable properties, so the view re-lays out when either changes.
 struct OrbitingHeadRootView: View {
     let head: HeadInstance
 
     var body: some View {
         let geometry = HeadGeometry.current
-        let inset = OrbitLayout(parentDiameter: geometry.diameter).panelInset
+        let inset = OrbitLayout.currentPanelInset
         HeadView(head: head)
             .frame(width: geometry.totalWidth, height: geometry.totalHeight)
             .padding(inset)
@@ -273,9 +275,9 @@ final class HeadWindowController {
 
     /// `head.position` is the origin of the plain head window (`HeadGeometry.windowSize`),
     /// which is what snapping, persistence and terminal anchoring all use. The panel is
-    /// that window grown by the orbit inset on every side.
+    /// that window grown by the orbit inset on every side (zero when children are hidden).
     private static func orbitInset() -> CGFloat {
-        OrbitLayout(parentDiameter: HeadGeometry.current.diameter).panelInset
+        OrbitLayout.currentPanelInset
     }
 
     private static func panelSize(inset: CGFloat) -> NSSize {
@@ -304,7 +306,8 @@ final class HeadWindowController {
     }
 
     /// True when a panel-local point is on the parent circle, its name label, or one of
-    /// the orbiting subagent heads. Everything else on the panel is transparent and inert.
+    /// the orbiting subagent heads (only while they are shown). Everything else on the
+    /// panel is transparent and inert.
     private func isHittable(_ point: NSPoint) -> Bool {
         let g = HeadGeometry.current
         let centre = circleCentreInPanel()
@@ -319,8 +322,8 @@ final class HeadWindowController {
         if label.contains(point) { return true }
 
         let children = head.children
-        guard !children.isEmpty else { return false }
-        let layout = OrbitLayout(parentDiameter: g.diameter)
+        guard AppSettings.shared.showSubagentChildren, !children.isEmpty else { return false }
+        let layout = OrbitLayout.current
         let phase = OrbitLayout.phase(at: Date())
         let relative = CGPoint(x: dx, y: dy)
         return children.indices.contains { index in
@@ -375,7 +378,9 @@ final class HeadWindowController {
         )
     }
 
-    /// Resize the panel and hosting view to match the current head size setting.
+    /// Resize the panel and hosting view to match the current head size and
+    /// "Show children for subagents" settings. The panel centre stays put, and since the
+    /// inset is symmetric, toggling children alone leaves `head.position` unchanged.
     func resizeToFit() {
         let inset = Self.orbitInset()
         let newSize = Self.panelSize(inset: inset)

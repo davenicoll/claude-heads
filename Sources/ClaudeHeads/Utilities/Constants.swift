@@ -3,6 +3,7 @@ import Foundation
 extension Notification.Name {
     static let terminalFontChanged = Notification.Name("com.claudeheads.terminalFontChanged")
     static let headSizeChanged = Notification.Name("com.claudeheads.headSizeChanged")
+    static let subagentChildrenVisibilityChanged = Notification.Name("com.claudeheads.subagentChildrenVisibilityChanged")
     static let headTapped = Notification.Name("com.claudeheads.headTapped")
 }
 

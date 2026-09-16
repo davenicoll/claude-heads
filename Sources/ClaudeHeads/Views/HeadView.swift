@@ -52,8 +52,18 @@ struct HeadView: View {
                 }
                 .overlay {
                     // Subagents orbit the circle; the overlay is centred on it and is
-                    // allowed to draw outside its bounds (the hosting panel is enlarged).
-                    SubagentOrbitView(children: head.children, layout: OrbitLayout(parentDiameter: diameter))
+                    // allowed to draw outside its bounds (the hosting panel is enlarged
+                    // while subagent children are shown). With "Show children for
+                    // subagents" off the view gets no children, so it renders nothing and
+                    // its TimelineView stays paused; the model keeps tracking children so
+                    // they reappear as soon as it is turned back on. The removal is not
+                    // animated then, because the panel has already shrunk and would clip it.
+                    let showChildren = AppSettings.shared.showSubagentChildren
+                    SubagentOrbitView(
+                        children: showChildren ? head.children : [],
+                        layout: OrbitLayout.current,
+                        animatesChanges: showChildren
+                    )
                 }
                 .padding(.top, emojiSize * HeadGeometry.emojiTopPadding)
                 .frame(width: totalSize)
@@ -162,6 +172,9 @@ private struct WaveEmoji: View {
 struct SubagentOrbitView: View {
     let children: [SubagentInstance]
     let layout: OrbitLayout
+    /// Whether children appearing/disappearing spring in and out. Off while the orbit is
+    /// hidden by settings, so the hide is instant rather than clipped by the shrunk panel.
+    var animatesChanges: Bool = true
 
     @State private var hoveredID: String?
 
@@ -195,7 +208,7 @@ struct SubagentOrbitView: View {
             }
             .rotationEffect(.radians(-phase))
         }
-        .animation(.spring(duration: 0.35), value: childIDs)
+        .animation(animatesChanges ? .spring(duration: 0.35) : nil, value: childIDs)
         .allowsHitTesting(!children.isEmpty)
         .onChange(of: childIDs) { _, ids in
             if let hoveredID, !ids.contains(hoveredID) { self.hoveredID = nil }
