@@ -34,7 +34,7 @@ This describes what the app does today. Anything not listed here is not implemen
 
 - The head waves when Claude goes quiet after at least 5 seconds of continuous output (a task finishing), and when the process exits
 - Clicking the waving head dismisses the wave and opens the terminal
-- A `HookWatcher` for Claude Code hook marker files exists in the codebase but is not currently connected to the UI; see the README Hook Setup section
+- With the Claude Code `Stop` hook configured (see the README Hook Setup section), `HookWatcher` picks up the `<uuid>.done` marker and the head goes idle and waves immediately, overriding the output-idle heuristic
 
 ## Settings
 

@@ -34,7 +34,7 @@ This is a description of how the shipped code is put together, organised by area
 
 - `AppState.handleProcessActivity`: on output, cancel any wave, set `.running` (recording the start time), and (re)arm a 2s idle timer. When the timer fires the head becomes `.idle`; if it had been running for at least 5s it waves for 2s. This filters out status-line blips.
 - `AppState.handleProcessExit`: set `.finished`, wave, close the terminal, remove the head after 10s.
-- `HookWatcher` (marker-file watcher) and its `onTaskComplete` callback are present but not instantiated by `AppState`; the wave is not hook-driven in the current code.
+- `AppState.hookWatcher` (`HookWatcher`) watches `~/.claude-heads/hooks` for `<uuid>.done` markers written by `notify.sh` from the Claude Code `Stop` hook. `handleHookTaskComplete` cancels the heuristic idle timer, sets `.idle`, and waves; output arriving within a 1s grace window afterwards (Claude's prompt redraw) is ignored so the indicator does not flicker.
 
 ## Persistence
 
@@ -51,7 +51,6 @@ This is a description of how the shipped code is put together, organised by area
 ## Not built
 
 - Group dragging / detach gesture (`SnapEngine.moveGroup` exists, unused)
-- Hook-driven completion (see above)
 - Launch at login, system notifications, badge counts
 - Custom avatar picker (the former `NewInstanceView` dialog was removed in favour of the folder picker)
 - Xcode project, signing, distribution packaging

@@ -23,7 +23,7 @@ Sources/
 │   └── ClaudeHeadsApp.swift           # @main App: MenuBarExtra (heads list, New Head, Settings, Quit)
 └── ClaudeHeads/                       # ClaudeHeadsCore library
     ├── App/
-    │   ├── AppDelegate.swift          # Accessory activation policy, creates ~/.claude-heads dirs, writes hooks/notify.sh
+    │   ├── AppDelegate.swift          # Accessory activation policy, creates ~/.claude-heads dirs
     │   └── AppState.swift             # Owns heads + window controllers, spawns processes, saves/restores state
     ├── Models/
     │   ├── HeadInstance.swift         # @Observable head model (position, screenID, isPinned, snapGroupID, state...)
@@ -73,7 +73,7 @@ Each head also owns a `FloatingTerminalPanel` (`NSPanel`, `[.titled, .closable, 
 
 ## Hook Integration
 
-`HookWatcher` is a file-system watcher (`DispatchSource.makeFileSystemObjectSource`) on `~/.claude-heads/hooks` that looks for `<uuid>.done` marker files, deletes them and calls `onTaskComplete(uuid)`. It also writes a `notify.sh` that touches such a marker. `AppDelegate` separately writes a `notify.sh` that appends to `events.log`. In the current code nothing instantiates `HookWatcher` and nothing consumes `onTaskComplete`; the wave animation is driven entirely by PTY activity (see Process Lifecycle). See the Hook Setup section of the README for the user-facing status.
+`HookWatcher` is a file-system watcher (`DispatchSource.makeFileSystemObjectSource`) on `~/.claude-heads/hooks` that looks for `<uuid>.done` marker files, deletes them and calls `onTaskComplete(uuid)`. It is the single source of truth for `notify.sh`, which it rewrites on every launch; the script reads `CLAUDE_INSTANCE_ID` (exported into each spawned `claude`) and touches the marker. `AppState` owns the watcher and routes `onTaskComplete` to `handleHookTaskComplete`, which is authoritative over the PTY-activity heuristic (see Process Lifecycle). Without the hook configured, the wave still fires from PTY idle detection. See the Hook Setup section of the README for configuration.
 
 ## Position Management
 
