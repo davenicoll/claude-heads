@@ -59,11 +59,6 @@ final class HookWatcher {
     # in the spawned claude process), or by $1 when invoked manually.
     # Creates a "<uuid>.done" marker file that the HookWatcher picks up.
 
-    # Drain stdin so Claude Code never blocks writing the event payload.
-    if [ ! -t 0 ]; then
-        cat > /dev/null 2>&1 || true
-    fi
-
     INSTANCE_ID="${CLAUDE_INSTANCE_ID:-${1:-}}"
 
     # Not launched by Claude Heads (or no id available): do nothing, never fail the session.
@@ -132,7 +127,7 @@ final class HookWatcher {
         )
 
         source.setEventHandler { [weak self] in
-            self?.scanForCompletedTasks()
+            self?.scanForCompletedTasks(notify: true)
         }
 
         let fd = directoryFD
@@ -140,13 +135,13 @@ final class HookWatcher {
             close(fd)
         }
 
+        // Sweep any markers left over from a previous run (e.g. the app quit while an
+        // orphaned claude finished) without notifying. Head UUIDs persist across launches,
+        // so replaying them would make a restored head wave at launch for a stale event.
+        scanForCompletedTasks(notify: false)
+
         source.resume()
         watchSource = source
-
-        // Do an initial scan in case files were already present before we started watching.
-        watchQueue.async { [weak self] in
-            self?.scanForCompletedTasks()
-        }
     }
 
     private func stopWatching() {
@@ -155,8 +150,9 @@ final class HookWatcher {
         directoryFD = -1
     }
 
-    /// Scans the hooks directory for `*.done` files, extracts UUIDs, notifies, and cleans up.
-    private func scanForCompletedTasks() {
+    /// Scans the hooks directory for `*.done` files, extracts UUIDs, cleans them up and,
+    /// when `notify` is true, delivers each UUID to `onTaskComplete` on the main queue.
+    private func scanForCompletedTasks(notify: Bool) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: hooksDirectory.path) else {
             return
@@ -175,6 +171,8 @@ final class HookWatcher {
 
             // Delete the marker file
             try? fm.removeItem(atPath: markerPath)
+
+            guard notify else { continue }
 
             // Notify on main queue
             DispatchQueue.main.async { [weak self] in

@@ -235,6 +235,11 @@ public final class AppState {
     /// Heads that have received at least one Claude Code hook event. For these, the
     /// output-silence heuristic no longer triggers waves; the hook is authoritative.
     private var hookedHeads: Set<UUID> = []
+    /// When each head was last set to idle by a hook event. Claude Code redraws its prompt
+    /// right after the Stop hook fires; that output must not flip the head back to .running.
+    private var hookIdleAt: [UUID: Date] = [:]
+    /// Output arriving within this window after a hook-driven idle is treated as prompt redraw.
+    private let hookIdleGrace: TimeInterval = 1.0
 
     /// Show the wave on a head and auto-dismiss it after `duration` seconds.
     private func triggerWave(for head: HeadInstance, dismissAfter duration: TimeInterval = 2.0) {
@@ -261,6 +266,7 @@ public final class AppState {
         if head.state == .running {
             head.state = .idle
         }
+        hookIdleAt[headID] = Date()
         triggerWave(for: head)
     }
 
@@ -274,6 +280,13 @@ public final class AppState {
             head.isWaving = false
             waveTimers[head.id]?.cancel()
             waveTimers.removeValue(forKey: head.id)
+        }
+
+        // Ignore the prompt redraw that immediately follows a hook-driven idle so the
+        // state indicator does not flicker idle -> running -> idle after every Stop hook.
+        let sinceHookIdle = Date().timeIntervalSince(hookIdleAt[head.id] ?? .distantPast)
+        if sinceHookIdle <= hookIdleGrace {
+            return
         }
 
         // Track when running started
